@@ -284,6 +284,8 @@ impl From<EspEncapMode> for u16 {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IdentityType {
     #[default]
+    Ipv4Address,
+    Ipv4Subnet,
     UserFqdn,
     Other(u8),
 }
@@ -291,7 +293,9 @@ pub enum IdentityType {
 impl From<u8> for IdentityType {
     fn from(value: u8) -> Self {
         match value {
+            1 => Self::Ipv4Address,
             3 => Self::UserFqdn,
+            4 => Self::Ipv4Subnet,
             other => Self::Other(other),
         }
     }
@@ -300,7 +304,9 @@ impl From<u8> for IdentityType {
 impl From<IdentityType> for u8 {
     fn from(value: IdentityType) -> Self {
         match value {
+            IdentityType::Ipv4Address => 1,
             IdentityType::UserFqdn => 3,
+            IdentityType::Ipv4Subnet => 4,
             IdentityType::Other(u) => u,
         }
     }

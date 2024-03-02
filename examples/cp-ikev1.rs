@@ -262,13 +262,15 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| String::from_utf8_lossy(&v).into_owned())
         .unwrap_or_default();
 
-    ikev1.do_esp_proposal().await?;
+    ikev1.do_esp_proposal(ipv4addr).await?;
 
     println!("CCC session: {}", ccc_session);
     println!("IPv4:        {}", ipv4addr);
     println!("Netmask:     {}", netmask);
     println!("DNS:         {:?}", dns);
     println!("Domains:     {}", search_domains);
+
+    ikev1.delete_sa().await?;
 
     Ok(())
 }

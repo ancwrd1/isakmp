@@ -84,7 +84,12 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         })
     }
 
-    fn build_esp_sa(&self, spi: u32, nonce: &[u8]) -> anyhow::Result<IsakmpMessage> {
+    fn build_esp_sa(
+        &self,
+        spi: u32,
+        nonce: &[u8],
+        ipaddr: Ipv4Addr,
+    ) -> anyhow::Result<IsakmpMessage> {
         let attributes = vec![
             DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
             DataAttribute::short(EspAttributeType::LifeDuration.into(), 3600),
@@ -120,12 +125,29 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let nonce_payload = Payload::Nonce(nonce.into());
 
+        let ip_payload = Payload::Identification(IdentificationPayload {
+            id_type: IdentityType::Ipv4Address.into(),
+            protocol_id: 0,
+            port: 0,
+            data: Bytes::copy_from_slice(&u32::from(ipaddr).to_be_bytes()),
+        });
+
+        let netmask_payload = Payload::Identification(IdentificationPayload {
+            id_type: IdentityType::Ipv4Subnet.into(),
+            protocol_id: 0,
+            port: 0,
+            data: Bytes::copy_from_slice(&0u64.to_be_bytes()),
+        });
+
         let message_id: u32 = random();
 
         let session = self.session.read();
 
-        let hash_payload =
-            self.make_hash_from_payloads(&session, message_id, &[&sa_payload, &nonce_payload])?;
+        let hash_payload = self.make_hash_from_payloads(
+            &session,
+            message_id,
+            &[&sa_payload, &nonce_payload, &ip_payload, &netmask_payload],
+        )?;
 
         let message = IsakmpMessage {
             cookie_i: session.cookie_i,
@@ -134,10 +156,44 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
-            payloads: vec![hash_payload, sa_payload, nonce_payload],
+            payloads: vec![
+                hash_payload,
+                sa_payload,
+                nonce_payload,
+                ip_payload,
+                netmask_payload,
+            ],
         };
 
         Ok(message)
+    }
+
+    fn build_delete_sa(&mut self) -> anyhow::Result<IsakmpMessage> {
+        let session = self.session.read();
+
+        let message_id = random();
+
+        let delete_payload = Payload::Delete(DeletePayload {
+            doi: 0,
+            protocol_id: ProtocolId::Isakmp,
+            spi_size: 16,
+            spi: vec![
+                Bytes::copy_from_slice(session.cookie_i.to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(session.cookie_r.to_be_bytes().as_slice()),
+            ],
+        });
+
+        let hash_payload = self.make_hash_from_payloads(&session, message_id, &[&delete_payload])?;
+
+        Ok(IsakmpMessage {
+            cookie_i: session.cookie_i,
+            cookie_r: session.cookie_r,
+            version: 0x10,
+            exchange_type: ExchangeType::Informational,
+            flags: IsakmpFlags::empty(),
+            message_id,
+            payloads: vec![delete_payload, hash_payload],
+        })
     }
 
     fn build_ke(&self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<IsakmpMessage> {
@@ -502,13 +558,13 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         self.get_attributes_payload(response)
     }
 
-    pub async fn do_esp_proposal(&mut self) -> anyhow::Result<()> {
+    pub async fn do_esp_proposal(&mut self, ipaddr: Ipv4Addr) -> anyhow::Result<()> {
         let spi_i: u32 = random();
         let nonce_i = Bytes::copy_from_slice(&random::<[u8; 32]>());
 
         debug!("Begin ESP SA proposal");
 
-        let request = self.build_esp_sa(spi_i, &nonce_i)?;
+        let request = self.build_esp_sa(spi_i, &nonce_i, ipaddr)?;
 
         let response = self
             .transport
@@ -576,6 +632,14 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         trace!("OUT AUTH: {}", hex::encode(&session.esp_out.sk_a));
 
         debug!("End ESP SA proposal");
+
+        Ok(())
+    }
+
+    pub async fn delete_sa(&mut self) -> anyhow::Result<()> {
+        let request = self.build_delete_sa()?;
+
+        self.transport.send(&request).await?;
 
         Ok(())
     }
