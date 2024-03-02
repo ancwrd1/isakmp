@@ -540,10 +540,8 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             })
             .ok_or_else(|| anyhow!("No proposal payload in response!"))?;
 
-        let session = self.session.read();
-
-        let prf = session.crypto.prf(
-            session.s_key_id_a.as_ref(),
+        let prf = self.session.read().crypto.prf(
+            self.session.read().s_key_id_a.as_ref(),
             [
                 &[0],
                 response.message_id.to_be_bytes().as_slice(),
@@ -553,16 +551,14 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         )?;
 
         let hash_msg = IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.read().cookie_i,
+            cookie_r: self.session.read().cookie_r,
             version: 0x10,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
             message_id: response.message_id,
             payloads: vec![Payload::Hash(BasicPayload::new(prf))],
         };
-
-        drop(session);
 
         self.transport.send(&hash_msg).await?;
 

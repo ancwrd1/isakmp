@@ -6,8 +6,8 @@ use parking_lot::RwLock;
 use tokio::net::UdpSocket;
 use tracing::debug;
 
-use crate::session::Ikev1Session;
 use crate::message::IsakmpMessage;
+use crate::session::Ikev1Session;
 
 #[async_trait]
 pub trait IsakmpTransport {
