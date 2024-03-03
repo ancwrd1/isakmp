@@ -89,12 +89,13 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         spi: u32,
         nonce: &[u8],
         ipaddr: Ipv4Addr,
+        lifetime: Duration,
     ) -> anyhow::Result<IsakmpMessage> {
         let attributes = vec![
             DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
             DataAttribute::long(
                 EspAttributeType::LifeDuration.into(),
-                Bytes::copy_from_slice(86400u32.to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(&lifetime.as_secs().to_be_bytes()),
             ),
             DataAttribute::short(
                 EspAttributeType::AuthenticationAlgorithm.into(),
@@ -562,13 +563,17 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         self.get_attributes_payload(response)
     }
 
-    pub async fn do_esp_proposal(&mut self, ipaddr: Ipv4Addr) -> anyhow::Result<()> {
+    pub async fn do_esp_proposal(
+        &mut self,
+        ipaddr: Ipv4Addr,
+        lifetime: Duration,
+    ) -> anyhow::Result<()> {
         let spi_i: u32 = random();
         let nonce_i = Bytes::copy_from_slice(&random::<[u8; 32]>());
 
         debug!("Begin ESP SA proposal");
 
-        let request = self.build_esp_sa(spi_i, &nonce_i, ipaddr)?;
+        let request = self.build_esp_sa(spi_i, &nonce_i, ipaddr, lifetime)?;
 
         let response = self
             .transport
