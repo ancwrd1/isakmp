@@ -18,8 +18,12 @@ use tokio::{
 };
 use tracing_subscriber::EnvFilter;
 
+use isakmp::model::IkeAttributeType;
 use isakmp::{
-    ikev1::Ikev1, model::ConfigAttributeType, payload::AttributesPayload, session::Ikev1Session,
+    ikev1::Ikev1,
+    model::{ConfigAttributeType, EspAttributeType},
+    payload::AttributesPayload,
+    session::Ikev1Session,
     transport::UdpTransport,
 };
 
@@ -190,7 +194,21 @@ async fn main() -> anyhow::Result<()> {
     let transport = UdpTransport::new(udp, session.clone());
     let mut ikev1 = Ikev1::new(transport, session.clone())?;
 
-    ikev1.do_sa_proposal(Duration::from_secs(120)).await?;
+    let attributes = ikev1.do_sa_proposal(Duration::from_secs(120)).await?;
+
+    let lifetime = attributes
+        .iter()
+        .find_map(|a| match IkeAttributeType::from(a.attribute_type) {
+            IkeAttributeType::LifeDuration => a.as_long().and_then(|v| {
+                let data: Option<[u8; 4]> = v.as_ref().try_into().ok();
+                data.map(u32::from_be_bytes)
+            }),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
+
+    println!("IKE lifetime: {}", lifetime);
+
     ikev1.do_key_exchange(my_addr, gateway_addr).await?;
 
     let (mut id_reply, message_id) = ikev1
@@ -262,11 +280,25 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| String::from_utf8_lossy(&v).into_owned())
         .unwrap_or_default();
 
-    ikev1
+    let attributes = ikev1
         .do_esp_proposal(ipv4addr, Duration::from_secs(60))
         .await?;
 
+    println!("{:#?}", attributes);
+
+    let lifetime = attributes
+        .iter()
+        .find_map(|a| match EspAttributeType::from(a.attribute_type) {
+            EspAttributeType::LifeDuration => a.as_long().and_then(|v| {
+                let data: Option<[u8; 4]> = v.as_ref().try_into().ok();
+                data.map(u32::from_be_bytes)
+            }),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
+
     println!("CCC session: {}", ccc_session);
+    println!("Lifetime:    {}", lifetime);
     println!("IPv4:        {}", ipv4addr);
     println!("Netmask:     {}", netmask);
     println!("DNS:         {:?}", dns);

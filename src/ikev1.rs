@@ -407,7 +407,10 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         Ok(Payload::Hash(BasicPayload::new(hash)))
     }
 
-    pub async fn do_sa_proposal(&mut self, lifetime: Duration) -> anyhow::Result<()> {
+    pub async fn do_sa_proposal(
+        &mut self,
+        lifetime: Duration,
+    ) -> anyhow::Result<Vec<DataAttribute>> {
         debug!("Begin SA proposal");
 
         let request = self.build_ike_sa(lifetime)?;
@@ -422,9 +425,25 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             .write()
             .init_from_sa(response.cookie_r, sa_bytes);
 
+        let attributes = response
+            .payloads
+            .into_iter()
+            .find_map(|p| match p {
+                Payload::SecurityAssociation(payload) => {
+                    payload.payloads.into_iter().find_map(|p| match p {
+                        Payload::Proposal(proposal) => {
+                            proposal.transforms.into_iter().next().map(|t| t.attributes)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("No attributes in response!"))?;
+
         debug!("End SA proposal");
 
-        Ok(())
+        Ok(attributes)
     }
 
     pub async fn do_key_exchange(
@@ -570,7 +589,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         &mut self,
         ipaddr: Ipv4Addr,
         lifetime: Duration,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<DataAttribute>> {
         let spi_i: u32 = random();
         let nonce_i = Bytes::copy_from_slice(&random::<[u8; 32]>());
 
@@ -594,12 +613,12 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let spi_r = response
             .payloads
-            .into_iter()
+            .iter()
             .find_map(|p| match p {
                 Payload::SecurityAssociation(payload) => {
-                    payload.payloads.into_iter().find_map(|p| match p {
+                    payload.payloads.iter().find_map(|p| match p {
                         Payload::Proposal(proposal) => {
-                            proposal.spi.reader().read_u32::<BigEndian>().ok()
+                            proposal.spi.clone().reader().read_u32::<BigEndian>().ok()
                         }
                         _ => None,
                     })
@@ -607,6 +626,22 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No proposal payload in response!"))?;
+
+        let attributes = response
+            .payloads
+            .into_iter()
+            .find_map(|p| match p {
+                Payload::SecurityAssociation(payload) => {
+                    payload.payloads.into_iter().find_map(|p| match p {
+                        Payload::Proposal(proposal) => {
+                            proposal.transforms.into_iter().next().map(|t| t.attributes)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("No attributes in response!"))?;
 
         let prf = self.session.read().crypto.prf(
             self.session.read().s_key_id_a.as_ref(),
@@ -645,7 +680,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         debug!("End ESP SA proposal");
 
-        Ok(())
+        Ok(attributes)
     }
 
     pub async fn delete_sa(&mut self) -> anyhow::Result<()> {
