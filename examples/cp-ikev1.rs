@@ -190,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
     let transport = UdpTransport::new(udp, session.clone());
     let mut ikev1 = Ikev1::new(transport, session.clone())?;
 
-    ikev1.do_sa_proposal().await?;
+    ikev1.do_sa_proposal(Duration::from_secs(120)).await?;
     ikev1.do_key_exchange(my_addr, gateway_addr).await?;
 
     let (mut id_reply, message_id) = ikev1
@@ -263,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_default();
 
     ikev1
-        .do_esp_proposal(ipv4addr, Duration::from_secs(3600))
+        .do_esp_proposal(ipv4addr, Duration::from_secs(60))
         .await?;
 
     println!("CCC session: {}", ccc_session);

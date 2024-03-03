@@ -28,7 +28,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         })
     }
 
-    fn build_ike_sa(&self) -> anyhow::Result<IsakmpMessage> {
+    fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
         let attributes = vec![
             DataAttribute::short(
                 IkeAttributeType::EncryptionAlgorithm.into(),
@@ -47,7 +47,10 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
                 IkeAuthMethod::HybridInitRsa.into(),
             ),
             DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
-            DataAttribute::short(IkeAttributeType::LifeDuration.into(), 28800),
+            DataAttribute::long(
+                IkeAttributeType::LifeDuration.into(),
+                Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+            ),
             DataAttribute::short(IkeAttributeType::KeyLength.into(), 256),
         ];
 
@@ -95,7 +98,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
             DataAttribute::long(
                 EspAttributeType::LifeDuration.into(),
-                Bytes::copy_from_slice(&lifetime.as_secs().to_be_bytes()),
+                Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
             ),
             DataAttribute::short(
                 EspAttributeType::AuthenticationAlgorithm.into(),
@@ -404,10 +407,10 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         Ok(Payload::Hash(BasicPayload::new(hash)))
     }
 
-    pub async fn do_sa_proposal(&mut self) -> anyhow::Result<()> {
+    pub async fn do_sa_proposal(&mut self, lifetime: Duration) -> anyhow::Result<()> {
         debug!("Begin SA proposal");
 
-        let request = self.build_ike_sa()?;
+        let request = self.build_ike_sa(lifetime)?;
         let sa_bytes = request.payloads[0].to_bytes();
 
         let response = self
