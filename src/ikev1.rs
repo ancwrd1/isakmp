@@ -92,7 +92,10 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
     ) -> anyhow::Result<IsakmpMessage> {
         let attributes = vec![
             DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
-            DataAttribute::short(EspAttributeType::LifeDuration.into(), 3600),
+            DataAttribute::long(
+                EspAttributeType::LifeDuration.into(),
+                Bytes::copy_from_slice(86400u32.to_be_bytes().as_slice()),
+            ),
             DataAttribute::short(
                 EspAttributeType::AuthenticationAlgorithm.into(),
                 EspAuthAlgorithm::HmacSha256.into(),
@@ -183,7 +186,8 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             ],
         });
 
-        let hash_payload = self.make_hash_from_payloads(&session, message_id, &[&delete_payload])?;
+        let hash_payload =
+            self.make_hash_from_payloads(&session, message_id, &[&delete_payload])?;
 
         Ok(IsakmpMessage {
             cookie_i: session.cookie_i,
@@ -570,6 +574,8 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             .transport
             .send_receive(&request, self.socket_timeout)
             .await?;
+
+        debug!("ESP reply: {:#?}", response);
 
         let nonce_r = response
             .payloads
