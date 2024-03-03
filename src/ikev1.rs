@@ -580,8 +580,6 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             .send_receive(&request, self.socket_timeout)
             .await?;
 
-        debug!("ESP reply: {:#?}", response);
-
         let nonce_r = response
             .payloads
             .iter()
