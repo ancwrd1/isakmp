@@ -181,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-    udp.connect(format!("{address}:4500")).await?;
+    udp.connect(format!("{address}:500")).await?;
 
     let gateway_addr = match udp.peer_addr()?.ip() {
         IpAddr::V4(v4) => v4,

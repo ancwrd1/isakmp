@@ -8,6 +8,8 @@ use tracing::{debug, trace};
 
 use crate::{message::IsakmpMessage, session::Ikev1Session};
 
+const NATT_PORT: u16 = 4500;
+
 #[async_trait]
 pub trait IsakmpTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()>;
@@ -51,10 +53,16 @@ impl IsakmpTransport for UdpTransport {
             data.len(),
             self.socket.peer_addr()?
         );
-        let mut send_buffer = vec![0u8, 0, 0, 0];
-        send_buffer.extend(&data);
 
-        self.socket.send(&send_buffer).await?;
+        let port = self.socket.peer_addr()?.port();
+
+        if port == NATT_PORT {
+            let mut send_buffer = vec![0u8, 0, 0, 0];
+            send_buffer.extend(&data);
+            self.socket.send(&send_buffer).await?;
+        } else {
+            self.socket.send(&data).await?;
+        }
 
         Ok(())
     }
@@ -65,7 +73,15 @@ impl IsakmpTransport for UdpTransport {
             let (size, _) =
                 tokio::time::timeout(timeout, self.socket.recv_from(&mut receive_buffer)).await??;
 
-            match self.parse_data(&receive_buffer[4..size])? {
+            let port = self.socket.peer_addr()?.port();
+
+            let data = if port == NATT_PORT {
+                &receive_buffer[4..size]
+            } else {
+                &receive_buffer
+            };
+
+            match self.parse_data(data)? {
                 None => continue,
                 Some(message) => break message,
             }
