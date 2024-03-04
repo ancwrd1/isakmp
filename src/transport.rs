@@ -23,6 +23,8 @@ pub trait IsakmpTransport {
         self.send(message).await?;
         self.receive(timeout).await
     }
+
+    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
 }
 
 pub struct UdpTransport {
@@ -64,23 +66,28 @@ impl IsakmpTransport for UdpTransport {
             let (size, _) =
                 tokio::time::timeout(timeout, self.socket.recv_from(&mut receive_buffer)).await??;
 
-            let hash = self
-                .session
-                .read()
-                .crypto
-                .hash([&receive_buffer[4..size]])?;
-
-            if self.received_hashes.contains(&hash) {
-                debug!("Discarding already received message");
-                continue;
+            match self.parse_data(&receive_buffer[4..size])? {
+                None => continue,
+                Some(message) => break message,
             }
-            self.received_hashes.push(hash);
-
-            debug!("Received ISAKMP message of size {}", size);
-            let mut reader = Cursor::new(&receive_buffer[4..size]);
-            let received_message = IsakmpMessage::parse(&mut reader, &mut self.session.write())?;
-            break received_message;
         };
         Ok(received_message)
+    }
+
+    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
+        let hash = self.session.read().crypto.hash([&data])?;
+
+        if self.received_hashes.contains(&hash) {
+            debug!("Discarding already received message");
+            Ok(None)
+        } else {
+            self.received_hashes.push(hash);
+            debug!("Parsing ISAKMP message of size {}", data.len());
+            let mut reader = Cursor::new(&data);
+            Ok(Some(IsakmpMessage::parse(
+                &mut reader,
+                &mut self.session.write(),
+            )?))
+        }
     }
 }
