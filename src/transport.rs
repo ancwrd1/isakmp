@@ -78,7 +78,7 @@ impl IsakmpTransport for UdpTransport {
             let data = if port == NATT_PORT {
                 &receive_buffer[4..size]
             } else {
-                &receive_buffer
+                &receive_buffer[0..size]
             };
 
             match self.parse_data(data)? {
