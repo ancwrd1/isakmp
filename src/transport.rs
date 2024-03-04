@@ -4,10 +4,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use tokio::net::UdpSocket;
-use tracing::debug;
+use tracing::{debug, trace};
 
-use crate::message::IsakmpMessage;
-use crate::session::Ikev1Session;
+use crate::{message::IsakmpMessage, session::Ikev1Session};
 
 #[async_trait]
 pub trait IsakmpTransport {
@@ -78,7 +77,7 @@ impl IsakmpTransport for UdpTransport {
         let hash = self.session.read().crypto.hash([&data])?;
 
         if self.received_hashes.contains(&hash) {
-            debug!("Discarding already received message");
+            trace!("Discarding already received message");
             Ok(None)
         } else {
             self.received_hashes.push(hash);
