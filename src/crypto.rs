@@ -21,13 +21,35 @@ const G2_P: &[u8] = &[
 
 pub struct Crypto {
     dh2: Dh<Private>,
+    digest: MessageDigest,
+    cipher: Cipher,
 }
 
 impl Crypto {
     pub fn new() -> anyhow::Result<Self> {
         let p = BigNum::from_slice(G2_P)?;
         let dh2 = Dh::from_pqg(p, None, BigNum::from_u32(2)?)?.generate_key()?;
-        Ok(Self { dh2 })
+        Ok(Self {
+            dh2,
+            digest: MessageDigest::sha256(),
+            cipher: Cipher::aes_256_cbc(),
+        })
+    }
+
+    pub fn init_sha1(&mut self) {
+        self.digest = MessageDigest::sha1();
+    }
+
+    pub fn init_sha256(&mut self) {
+        self.digest = MessageDigest::sha256();
+    }
+
+    pub fn init_cipher(&mut self, key_len: usize) {
+        if key_len == 16 {
+            self.cipher = Cipher::aes_128_cbc()
+        } else if key_len == 32 {
+            self.cipher = Cipher::aes_256_cbc()
+        }
     }
 
     pub fn public_key(&self) -> Bytes {
@@ -50,7 +72,7 @@ impl Crypto {
     {
         let key = PKey::hmac(key)?;
 
-        let mut signer = Signer::new(MessageDigest::sha256(), &key)?;
+        let mut signer = Signer::new(self.digest, &key)?;
         for d in data.into_iter() {
             signer.update(d.as_ref())?;
         }
@@ -63,7 +85,7 @@ impl Crypto {
         I: IntoIterator<Item = R>,
         R: AsRef<[u8]>,
     {
-        let mut hasher = Hasher::new(MessageDigest::sha256())?;
+        let mut hasher = Hasher::new(self.digest)?;
         for d in data.into_iter() {
             hasher.update(d.as_ref())?;
         }
@@ -77,10 +99,9 @@ impl Crypto {
         data: &[u8],
         iv: Option<&[u8]>,
     ) -> anyhow::Result<Bytes> {
-        let cipher = Cipher::aes_256_cbc();
-        let mut crypter = Crypter::new(cipher, mode, key, iv)?;
+        let mut crypter = Crypter::new(self.cipher, mode, key, iv)?;
         crypter.pad(false);
-        let mut out = vec![0; data.len() + cipher.block_size()];
+        let mut out = vec![0; data.len() + self.cipher.block_size()];
         let count = crypter.update(data, &mut out)?;
         let rest = crypter.finalize(&mut out[count..])?;
         out.truncate(count + rest);
@@ -96,6 +117,14 @@ impl Crypto {
     }
 
     pub fn block_size(&self) -> usize {
-        Cipher::aes_256_cbc().block_size()
+        self.cipher.block_size()
+    }
+
+    pub fn key_len(&self) -> usize {
+        self.cipher.key_len()
+    }
+
+    pub fn hash_len(&self) -> usize {
+        self.digest.size()
     }
 }

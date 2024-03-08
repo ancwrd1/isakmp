@@ -158,6 +158,7 @@ impl From<IkeGroupDescription> for u16 {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IkeHashAlgorithm {
+    Sha,
     #[default]
     Sha256,
     Other(u16),
@@ -166,6 +167,7 @@ pub enum IkeHashAlgorithm {
 impl From<u16> for IkeHashAlgorithm {
     fn from(value: u16) -> Self {
         match value {
+            2 => Self::Sha,
             4 => Self::Sha256,
             other => Self::Other(other),
         }
@@ -175,6 +177,7 @@ impl From<u16> for IkeHashAlgorithm {
 impl From<IkeHashAlgorithm> for u16 {
     fn from(value: IkeHashAlgorithm) -> Self {
         match value {
+            IkeHashAlgorithm::Sha => 2,
             IkeHashAlgorithm::Sha256 => 4,
             IkeHashAlgorithm::Other(u) => u,
         }
@@ -233,15 +236,30 @@ impl From<IkeAuthMethod> for u16 {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EspAuthAlgorithm {
+    HmacSha96,
+    HmacSha160,
     #[default]
     HmacSha256,
     Other(u16),
 }
 
+impl EspAuthAlgorithm {
+    pub fn hash_len(&self) -> usize {
+        match self {
+            EspAuthAlgorithm::HmacSha96 => 20,
+            EspAuthAlgorithm::HmacSha160 => 20,
+            EspAuthAlgorithm::HmacSha256 => 32,
+            EspAuthAlgorithm::Other(_) => 0,
+        }
+    }
+}
+
 impl From<u16> for EspAuthAlgorithm {
     fn from(value: u16) -> Self {
         match value {
+            2 => Self::HmacSha96,
             5 => Self::HmacSha256,
+            7 => Self::HmacSha160,
             other => Self::Other(other),
         }
     }
@@ -250,7 +268,9 @@ impl From<u16> for EspAuthAlgorithm {
 impl From<EspAuthAlgorithm> for u16 {
     fn from(value: EspAuthAlgorithm) -> Self {
         match value {
+            EspAuthAlgorithm::HmacSha96 => 2,
             EspAuthAlgorithm::HmacSha256 => 5,
+            EspAuthAlgorithm::HmacSha160 => 7,
             EspAuthAlgorithm::Other(u) => u,
         }
     }

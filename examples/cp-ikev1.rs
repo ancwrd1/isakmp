@@ -155,7 +155,7 @@ async fn handle_id_reply(
         .into_iter()
         .next();
 
-    if let Some(_) = username_attr {
+    if username_attr.is_some() {
         do_user_name(
             ikev1,
             ConfigAttributeType::UserName,

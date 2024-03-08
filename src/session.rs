@@ -1,15 +1,18 @@
+use anyhow::anyhow;
 use std::collections::HashMap;
 
 use bytes::Bytes;
 use rand::{random, RngCore};
 
-use crate::crypto::Crypto;
+use crate::model::EspAuthAlgorithm;
+use crate::{crypto::Crypto, model::IkeHashAlgorithm};
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct EspCryptMaterial {
     pub spi: u32,
     pub sk_e: Bytes,
     pub sk_a: Bytes,
+    pub auth_algorithm: EspAuthAlgorithm,
 }
 
 pub struct Ikev1Session {
@@ -64,9 +67,24 @@ impl Ikev1Session {
         })
     }
 
-    pub fn init_from_sa(&mut self, cookie_r: u64, sa_bytes: Bytes) {
+    pub fn init_from_sa(
+        &mut self,
+        cookie_r: u64,
+        sa_bytes: Bytes,
+        hash_alg: IkeHashAlgorithm,
+        key_len: usize,
+    ) -> anyhow::Result<()> {
         self.cookie_r = cookie_r;
         self.sa_bytes = sa_bytes;
+
+        self.crypto.init_cipher(key_len);
+
+        match hash_alg {
+            IkeHashAlgorithm::Sha => self.crypto.init_sha1(),
+            IkeHashAlgorithm::Sha256 => self.crypto.init_sha256(),
+            _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", hash_alg)),
+        }
+        Ok(())
     }
 
     pub fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
@@ -84,40 +102,41 @@ impl Ikev1Session {
         // RFC2409: SKEYID = prf(Ni_b | Nr_b, g^xy)
         self.s_key_id = self.crypto.prf(&key, [&self.shared_secret])?;
 
-        // RFC2409: SKEYID_d = prf(SKEYID, g^xy | CKY-I | CKY-R | 0)
-        self.s_key_id_d = self.crypto.prf(
-            &self.s_key_id,
-            [
-                self.shared_secret.as_ref(),
-                &self.cookie_i.to_be_bytes(),
-                &self.cookie_r.to_be_bytes(),
-                &[0],
-            ],
-        )?;
+        let mut data = Vec::new();
+        let mut seed = Bytes::new();
 
-        // RFC2409: SKEYID_a = prf(SKEYID, SKEYID_d | g^xy | CKY-I | CKY-R | 1)
-        self.s_key_id_a = self.crypto.prf(
-            &self.s_key_id,
-            [
-                self.s_key_id_d.as_ref(),
-                self.shared_secret.as_ref(),
-                &self.cookie_i.to_be_bytes(),
-                &self.cookie_r.to_be_bytes(),
-                &[1],
-            ],
-        )?;
+        // SKEYID_{d,a,e}
+        for i in 0..3 {
+            seed = self.crypto.prf(
+                &self.s_key_id,
+                [
+                    seed.as_ref(),
+                    self.shared_secret.as_ref(),
+                    &self.cookie_i.to_be_bytes(),
+                    &self.cookie_r.to_be_bytes(),
+                    &[i],
+                ],
+            )?;
+            data.extend(&seed);
+        }
 
-        // RFC2409: SKEYID_e = prf(SKEYID, SKEYID_a | g^xy | CKY-I | CKY-R | 2)
-        self.s_key_id_e = self.crypto.prf(
-            &self.s_key_id,
-            [
-                self.s_key_id_a.as_ref(),
-                self.shared_secret.as_ref(),
-                &self.cookie_i.to_be_bytes(),
-                &self.cookie_r.to_be_bytes(),
-                &[2],
-            ],
-        )?;
+        let hash_len = self.crypto.hash_len();
+        self.s_key_id_d = Bytes::copy_from_slice(&data[0..hash_len]);
+        self.s_key_id_a = Bytes::copy_from_slice(&data[hash_len..hash_len * 2]);
+        self.s_key_id_e = Bytes::copy_from_slice(&data[hash_len * 2..]);
+
+        if self.s_key_id_e.len() < self.crypto.key_len() {
+            let mut data = Vec::new();
+            let mut seed = Bytes::new();
+            while data.len() < self.crypto.key_len() {
+                seed = self.crypto.prf(&self.s_key_id_e, [seed.as_ref()])?;
+                data.extend(&seed);
+            }
+            data.truncate(self.crypto.key_len());
+            self.s_key_id_e = data.into();
+        } else {
+            self.s_key_id_e.truncate(self.crypto.key_len());
+        }
 
         let mut iv = self.crypto.hash([&self.public_key_i, &self.public_key_r])?;
         iv.truncate(self.crypto.block_size());
@@ -127,31 +146,39 @@ impl Ikev1Session {
         Ok(())
     }
 
-    fn gen_esp_material(&mut self, spi: u32) -> anyhow::Result<EspCryptMaterial> {
-        // SK_e = prf(SKEYID_d, [ g(qm)^xy | ] protocol | SPI | Ni_b | Nr_b)
-        let sk_e = self.crypto.prf(
-            &self.s_key_id_d,
-            [
-                &[3],
-                spi.to_be_bytes().as_slice(),
-                &self.esp_nonce_i,
-                &self.esp_nonce_r,
-            ],
-        )?;
+    fn gen_esp_material(
+        &mut self,
+        spi: u32,
+        auth_algorithm: EspAuthAlgorithm,
+        key_length: usize,
+    ) -> anyhow::Result<EspCryptMaterial> {
+        let keymat_len = key_length + auth_algorithm.hash_len();
 
-        // SK_a = prf(SKEYID_d, SK_e | [ g(qm)^xy | ] protocol | SPI | Ni_b | Nr_b)
-        let sk_a = self.crypto.prf(
-            &self.s_key_id_d,
-            [
-                sk_e.as_ref(),
-                &[3],
-                spi.to_be_bytes().as_slice(),
-                &self.esp_nonce_i,
-                &self.esp_nonce_r,
-            ],
-        )?;
+        let mut data = Vec::new();
+        let mut seed = Bytes::new();
+        while data.len() < keymat_len {
+            seed = self.crypto.prf(
+                &self.s_key_id_d,
+                [
+                    seed.as_ref(),
+                    &[3],
+                    spi.to_be_bytes().as_slice(),
+                    &self.esp_nonce_i,
+                    &self.esp_nonce_r,
+                ],
+            )?;
+            data.extend(&seed);
+        }
 
-        Ok(EspCryptMaterial { spi, sk_e, sk_a })
+        let sk_e = Bytes::copy_from_slice(&data[0..key_length]);
+        let sk_a = Bytes::copy_from_slice(&data[key_length..keymat_len]);
+
+        Ok(EspCryptMaterial {
+            spi,
+            sk_e,
+            sk_a,
+            auth_algorithm,
+        })
     }
 
     pub fn init_from_qm(
@@ -160,13 +187,15 @@ impl Ikev1Session {
         nonce_i: Bytes,
         spi_r: u32,
         nonce_r: Bytes,
+        auth_alg: EspAuthAlgorithm,
+        key_len: usize,
     ) -> anyhow::Result<()> {
         self.esp_spi_i = spi_i;
         self.esp_spi_r = spi_r;
         self.esp_nonce_i = nonce_i;
         self.esp_nonce_r = nonce_r;
-        self.esp_in = self.gen_esp_material(self.esp_spi_i)?;
-        self.esp_out = self.gen_esp_material(self.esp_spi_r)?;
+        self.esp_in = self.gen_esp_material(self.esp_spi_i, auth_alg, key_len)?;
+        self.esp_out = self.gen_esp_material(self.esp_spi_r, auth_alg, key_len)?;
 
         Ok(())
     }

@@ -33,36 +33,43 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
     }
 
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
-        let attributes = vec![
-            DataAttribute::short(
-                IkeAttributeType::EncryptionAlgorithm.into(),
-                IkeEncryptionAlgorithm::AesCbc.into(),
-            ),
-            DataAttribute::short(
-                IkeAttributeType::HashAlgorithm.into(),
-                IkeHashAlgorithm::Sha256.into(),
-            ),
-            DataAttribute::short(
-                IkeAttributeType::GroupDescription.into(),
-                IkeGroupDescription::Oakley2.into(),
-            ),
-            DataAttribute::short(
-                IkeAttributeType::AuthenticationMethod.into(),
-                IkeAuthMethod::HybridInitRsa.into(),
-            ),
-            DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
-            DataAttribute::long(
-                IkeAttributeType::LifeDuration.into(),
-                Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-            ),
-            DataAttribute::short(IkeAttributeType::KeyLength.into(), 256),
-        ];
+        let mut transforms = Vec::new();
 
-        let transforms = vec![TransformPayload {
-            transform_num: 1,
-            transform_id: TransformId::KeyIke,
-            attributes,
-        }];
+        for auth in [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha] {
+            for key_len in [256, 128] {
+                let attributes = vec![
+                    DataAttribute::short(
+                        IkeAttributeType::EncryptionAlgorithm.into(),
+                        IkeEncryptionAlgorithm::AesCbc.into(),
+                    ),
+                    DataAttribute::short(IkeAttributeType::HashAlgorithm.into(), auth.into()),
+                    DataAttribute::short(
+                        IkeAttributeType::GroupDescription.into(),
+                        IkeGroupDescription::Oakley2.into(),
+                    ),
+                    DataAttribute::short(
+                        IkeAttributeType::AuthenticationMethod.into(),
+                        IkeAuthMethod::HybridInitRsa.into(),
+                    ),
+                    DataAttribute::short(
+                        IkeAttributeType::LifeType.into(),
+                        LifeType::Seconds.into(),
+                    ),
+                    DataAttribute::long(
+                        IkeAttributeType::LifeDuration.into(),
+                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                    ),
+                    DataAttribute::short(IkeAttributeType::KeyLength.into(), key_len),
+                ];
+
+                transforms.push(TransformPayload {
+                    transform_num: (transforms.len() + 1) as _,
+                    transform_id: TransformId::KeyIke,
+                    attributes,
+                });
+            }
+        }
+
         let proposal = Payload::Proposal(ProposalPayload {
             proposal_num: 1,
             protocol_id: ProtocolId::Isakmp,
@@ -91,6 +98,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         })
     }
 
+    #[allow(clippy::single_element_loop)]
     fn build_esp_sa(
         &self,
         spi: u32,
@@ -98,28 +106,36 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         ipaddr: Ipv4Addr,
         lifetime: Duration,
     ) -> anyhow::Result<IsakmpMessage> {
-        let attributes = vec![
-            DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
-            DataAttribute::long(
-                EspAttributeType::LifeDuration.into(),
-                Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-            ),
-            DataAttribute::short(
-                EspAttributeType::AuthenticationAlgorithm.into(),
-                EspAuthAlgorithm::HmacSha256.into(),
-            ),
-            DataAttribute::short(
-                EspAttributeType::EncapsulationMode.into(),
-                EspEncapMode::UdpTunnel.into(),
-            ),
-            DataAttribute::short(EspAttributeType::KeyLength.into(), 256),
-        ];
+        let mut transforms = Vec::new();
 
-        let transforms = vec![TransformPayload {
-            transform_num: 1,
-            transform_id: TransformId::EspAesCbc,
-            attributes,
-        }];
+        for auth in [EspAuthAlgorithm::HmacSha256] {
+            for key_len in [256] {
+                let attributes = vec![
+                    DataAttribute::short(
+                        EspAttributeType::LifeType.into(),
+                        LifeType::Seconds.into(),
+                    ),
+                    DataAttribute::long(
+                        EspAttributeType::LifeDuration.into(),
+                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                    ),
+                    DataAttribute::short(
+                        EspAttributeType::AuthenticationAlgorithm.into(),
+                        auth.into(),
+                    ),
+                    DataAttribute::short(
+                        EspAttributeType::EncapsulationMode.into(),
+                        EspEncapMode::UdpTunnel.into(),
+                    ),
+                    DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
+                ];
+                transforms.push(TransformPayload {
+                    transform_num: (transforms.len() + 1) as _,
+                    transform_id: TransformId::EspAesCbc,
+                    attributes,
+                });
+            }
+        }
 
         let proposal = Payload::Proposal(ProposalPayload {
             proposal_num: 1,
@@ -425,10 +441,6 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             .send_receive(&request, self.socket_timeout)
             .await?;
 
-        self.session
-            .write()
-            .init_from_sa(response.cookie_r, sa_bytes);
-
         let attributes = response
             .payloads
             .into_iter()
@@ -444,6 +456,36 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No attributes in response!"))?;
+
+        let hash_alg: IkeHashAlgorithm = attributes
+            .iter()
+            .find_map(|a| {
+                if a.attribute_type == IkeAttributeType::HashAlgorithm.into() {
+                    a.as_short().map(Into::into)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow!("No hash algorithm in response!"))?;
+
+        debug!("Negotiated SA hash algorithm: {:?}", hash_alg);
+
+        let key_len = attributes
+            .iter()
+            .find_map(|a| {
+                if a.attribute_type == IkeAttributeType::KeyLength.into() {
+                    a.as_short().map(|k| k as usize / 8)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow!("No hash algorithm in response!"))?;
+
+        debug!("Negotiated SA key length: {}", key_len);
+
+        self.session
+            .write()
+            .init_from_sa(response.cookie_r, sa_bytes, hash_alg, key_len)?;
 
         debug!("End SA proposal");
 
@@ -518,11 +560,13 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let request = self.build_id(notify_data)?;
 
-        self.transport
+        let _cert_response = self
+            .transport
             .send_receive(&request, self.socket_timeout)
             .await?;
 
         let response = self.transport.receive(self.socket_timeout).await?;
+
         let message_id = response.message_id;
 
         debug!("Response message ID: {:04x}", message_id);
@@ -657,6 +701,33 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             ],
         )?;
 
+        let auth_alg: EspAuthAlgorithm = attributes
+            .iter()
+            .find_map(|a| {
+                if a.attribute_type == EspAttributeType::AuthenticationAlgorithm.into() {
+                    a.as_short().map(Into::into)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow!("No auth algorithm in response!"))?;
+
+        debug!("Negotiated ESP auth algorithm: {:?}", auth_alg);
+
+        let key_len = attributes
+            .iter()
+            .find_map(|a| {
+                if a.attribute_type == EspAttributeType::KeyLength.into() {
+                    a.as_short().map(|k| k as usize)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(128)
+            / 8;
+
+        debug!("Negotiated ESP key length: {}", key_len);
+
         let hash_msg = IsakmpMessage {
             cookie_i: self.session.read().cookie_i,
             cookie_r: self.session.read().cookie_r,
@@ -671,16 +742,18 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         self.session
             .write()
-            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r)?;
+            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, auth_alg, key_len)?;
 
         let session = self.session.read();
 
         trace!("IN  SPI : {:04x}", session.esp_in.spi);
         trace!("IN  ENC : {}", hex::encode(&session.esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&session.esp_in.sk_a));
+        trace!("IN  ALG : {:?}", session.esp_in.auth_algorithm);
         trace!("OUT SPI : {:04x}", session.esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&session.esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&session.esp_out.sk_a));
+        trace!("OUT ALG : {:?}", session.esp_out.auth_algorithm);
 
         debug!("End ESP SA proposal");
 

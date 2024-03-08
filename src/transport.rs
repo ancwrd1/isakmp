@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::{io::Cursor, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -6,6 +7,8 @@ use parking_lot::RwLock;
 use tokio::net::UdpSocket;
 use tracing::{debug, trace};
 
+use crate::model::ExchangeType;
+use crate::payload::Payload;
 use crate::{message::IsakmpMessage, session::Ikev1Session};
 
 const NATT_PORT: u16 = 4500;
@@ -99,10 +102,23 @@ impl IsakmpTransport for UdpTransport {
             self.received_hashes.push(hash);
             debug!("Parsing ISAKMP message of size {}", data.len());
             let mut reader = Cursor::new(&data);
-            Ok(Some(IsakmpMessage::parse(
-                &mut reader,
-                &mut self.session.write(),
-            )?))
+
+            let msg = IsakmpMessage::parse(&mut reader, &mut self.session.write())?;
+            if msg.exchange_type == ExchangeType::Informational {
+                for payload in &msg.payloads {
+                    if let Payload::Notification(notify) = payload {
+                        if notify.message_type == 31 || notify.message_type == 9101 {
+                            return Err(
+                                anyhow!(String::from_utf8_lossy(&notify.data).into_owned()),
+                            );
+                        } else if notify.message_type < 31 {
+                            return Err(anyhow!("IKE notify error {}", notify.message_type));
+                        }
+                    }
+                }
+            }
+
+            Ok(Some(msg))
         }
     }
 }

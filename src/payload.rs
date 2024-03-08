@@ -328,7 +328,7 @@ impl PayloadLike for DeletePayload {
         buf.put_u8(self.spi_size);
         buf.put_u16(self.spi.len() as _);
         for spi in &self.spi {
-            buf.put_slice(&spi);
+            buf.put_slice(spi);
         }
 
         buf.freeze()
