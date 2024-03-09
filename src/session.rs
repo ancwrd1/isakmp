@@ -1,11 +1,12 @@
-use anyhow::anyhow;
 use std::collections::HashMap;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 use rand::{random, RngCore};
 
-use crate::model::EspAuthAlgorithm;
-use crate::{crypto::Crypto, model::IkeHashAlgorithm};
+use crate::crypto::CertData;
+use crate::model::Identity;
+use crate::{crypto::Crypto, model::EspAuthAlgorithm, model::IkeHashAlgorithm};
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct EspCryptMaterial {
@@ -24,7 +25,7 @@ pub struct Ikev1Session {
     pub nonce_i: Bytes,
     pub nonce_r: Bytes,
     shared_secret: Bytes,
-    s_key_id: Bytes,
+    pub s_key_id: Bytes,
     s_key_id_d: Bytes,
     pub s_key_id_a: Bytes,
     pub s_key_id_e: Bytes,
@@ -39,8 +40,8 @@ pub struct Ikev1Session {
 }
 
 impl Ikev1Session {
-    pub fn new() -> anyhow::Result<Self> {
-        let crypto = Crypto::new()?;
+    pub fn new(identity: Identity) -> anyhow::Result<Self> {
+        let crypto = Crypto::new(identity)?;
         let public_key_i = crypto.public_key();
         let nonce_i: [u8; 32] = random();
         Ok(Self {
@@ -254,5 +255,9 @@ impl Ikev1Session {
                 id_bytes,
             ],
         )
+    }
+
+    pub fn cert_data(&self) -> Option<&CertData> {
+        self.crypto.cert_data()
     }
 }

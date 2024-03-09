@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::path::PathBuf;
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -211,6 +212,7 @@ impl From<LifeType> for u16 {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IkeAuthMethod {
+    RsaSignature,
     #[default]
     HybridInitRsa,
     Other(u16),
@@ -219,6 +221,7 @@ pub enum IkeAuthMethod {
 impl From<u16> for IkeAuthMethod {
     fn from(value: u16) -> Self {
         match value {
+            3 => Self::RsaSignature,
             64221 => Self::HybridInitRsa,
             other => Self::Other(other),
         }
@@ -228,6 +231,7 @@ impl From<u16> for IkeAuthMethod {
 impl From<IkeAuthMethod> for u16 {
     fn from(value: IkeAuthMethod) -> Self {
         match value {
+            IkeAuthMethod::RsaSignature => 3,
             IkeAuthMethod::HybridInitRsa => 64221,
             IkeAuthMethod::Other(u) => u,
         }
@@ -307,6 +311,7 @@ pub enum IdentityType {
     Ipv4Address,
     Ipv4Subnet,
     UserFqdn,
+    DerAsn1Dn,
     Other(u8),
 }
 
@@ -316,6 +321,7 @@ impl From<u8> for IdentityType {
             1 => Self::Ipv4Address,
             3 => Self::UserFqdn,
             4 => Self::Ipv4Subnet,
+            9 => Self::DerAsn1Dn,
             other => Self::Other(other),
         }
     }
@@ -327,6 +333,7 @@ impl From<IdentityType> for u8 {
             IdentityType::Ipv4Address => 1,
             IdentityType::UserFqdn => 3,
             IdentityType::Ipv4Subnet => 4,
+            IdentityType::DerAsn1Dn => 9,
             IdentityType::Other(u) => u,
         }
     }
@@ -865,4 +872,14 @@ impl From<AttributesPayloadType> for u8 {
             AttributesPayloadType::Reserved(v) => v,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum Identity {
+    Certificate {
+        path: PathBuf,
+        password: Option<String>,
+    },
+    #[default]
+    None,
 }

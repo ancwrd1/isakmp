@@ -49,7 +49,11 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
                     ),
                     DataAttribute::short(
                         IkeAttributeType::AuthenticationMethod.into(),
-                        IkeAuthMethod::HybridInitRsa.into(),
+                        if self.session.read().cert_data().is_some() {
+                            IkeAuthMethod::RsaSignature.into()
+                        } else {
+                            IkeAuthMethod::HybridInitRsa.into()
+                        },
                     ),
                     DataAttribute::short(
                         IkeAttributeType::LifeType.into(),
@@ -87,6 +91,19 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         let vid2 = Payload::VendorId(hex::decode(NATT_VID)?.into());
         let vid3 = Payload::VendorId(hex::decode(EXT_VID_WITH_FLAGS)?.into());
 
+        let mut payloads = vec![sa, vid1, vid2, vid3];
+
+        if let Some(cert_data) = self.session.read().cert_data() {
+            payloads.push(Payload::Certificate(CertificatePayload {
+                certificate_type: CertificateType::X509ForSignature,
+                data: cert_data.issuer(),
+            }));
+            payloads.push(Payload::Certificate(CertificatePayload {
+                certificate_type: CertificateType::X509ForSignature,
+                data: Default::default(),
+            }));
+        }
+
         Ok(IsakmpMessage {
             cookie_i: self.session.read().cookie_i,
             cookie_r: 0,
@@ -94,7 +111,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
-            payloads: vec![sa, vid1, vid2, vid3],
+            payloads,
         })
     }
 
@@ -263,15 +280,21 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         })
     }
 
-    fn build_id(&self, notify_data: Bytes) -> anyhow::Result<IsakmpMessage> {
-        let id_payload = Payload::Identification(IdentificationPayload {
-            id_type: IdentityType::UserFqdn.into(),
-            protocol_id: 0,
-            port: 0,
-            data: Bytes::new(),
-        });
-
+    fn build_id_protection(&self, notify_data: Bytes) -> anyhow::Result<IsakmpMessage> {
         let session = self.session.read();
+
+        let id_payload = if let Some(cert_data) = session.cert_data() {
+            Payload::Identification(IdentificationPayload {
+                id_type: IdentityType::DerAsn1Dn.into(),
+                data: cert_data.subject(),
+                ..Default::default()
+            })
+        } else {
+            Payload::Identification(IdentificationPayload {
+                id_type: IdentityType::UserFqdn.into(),
+                ..Default::default()
+            })
+        };
 
         let notify_payload = Payload::Notification(NotificationPayload {
             doi: 0,
@@ -288,7 +311,26 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let hash_i = session.hash_i(id_payload.to_bytes().as_ref())?;
 
-        let hash_payload = Payload::Hash(BasicPayload::new(hash_i));
+        let payloads = if let Some(cert_data) = session.cert_data() {
+            let mut payloads = vec![id_payload];
+
+            payloads.extend(cert_data.certs().into_iter().map(|cert| {
+                Payload::Certificate(CertificatePayload {
+                    certificate_type: CertificateType::X509ForSignature,
+                    data: cert,
+                })
+            }));
+
+            let sig_payload = Payload::Signature(BasicPayload::new(cert_data.sign(&hash_i)?));
+
+            payloads.push(sig_payload);
+            payloads.push(notify_payload);
+
+            payloads
+        } else {
+            let hash_payload = Payload::Hash(BasicPayload::new(hash_i));
+            vec![hash_payload, id_payload, notify_payload]
+        };
 
         Ok(IsakmpMessage {
             cookie_i: session.cookie_i,
@@ -297,7 +339,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::ENCRYPTION,
             message_id: 0,
-            payloads: vec![hash_payload, id_payload, notify_payload],
+            payloads,
         })
     }
 
@@ -552,30 +594,39 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
             .ok_or_else(|| anyhow!("No config payload in response!"))
     }
 
+    pub async fn get_auth_attributes(&mut self) -> anyhow::Result<(AttributesPayload, u32)> {
+        debug!("Waiting for attributes payload");
+
+        let attr_response = self.transport.receive(self.socket_timeout).await?;
+
+        let message_id = attr_response.message_id;
+
+        debug!("Attributes message ID: {:04x}", message_id);
+
+        Ok((self.get_attributes_payload(attr_response)?, message_id))
+    }
+
     pub async fn do_identity_protection(
         &mut self,
         notify_data: Bytes,
-    ) -> anyhow::Result<(AttributesPayload, u32)> {
+    ) -> anyhow::Result<IdentificationPayload> {
         debug!("Begin identity protection");
 
-        let request = self.build_id(notify_data)?;
+        let request = self.build_id_protection(notify_data)?;
 
-        let _cert_response = self
+        let response = self
             .transport
             .send_receive(&request, self.socket_timeout)
             .await?;
 
-        let response = self.transport.receive(self.socket_timeout).await?;
-
-        let message_id = response.message_id;
-
-        debug!("Response message ID: {:04x}", message_id);
-
-        let config = self.get_attributes_payload(response)?;
-
-        debug!("End identity protection");
-
-        Ok((config, message_id))
+        Ok(response
+            .payloads
+            .into_iter()
+            .find_map(|payload| match payload {
+                Payload::Identification(id) => Some(id),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("No identification payload in response!"))?)
     }
 
     pub async fn send_auth_attribute(

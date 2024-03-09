@@ -1,4 +1,10 @@
+use std::path::Path;
+
+use anyhow::anyhow;
 use bytes::Bytes;
+use openssl::pkcs12::Pkcs12;
+use openssl::rsa::Padding;
+use openssl::x509::X509;
 use openssl::{
     bn::BigNum,
     dh::Dh,
@@ -7,6 +13,8 @@ use openssl::{
     sign::Signer,
     symm::{Cipher, Crypter, Mode},
 };
+
+use crate::model::Identity;
 
 // RFC2409: Oakley group 2
 const G2_P: &[u8] = &[
@@ -19,20 +27,98 @@ const G2_P: &[u8] = &[
     255, 255, 255, 255,
 ];
 
+pub struct CertData {
+    pkey: PKey<Private>,
+    certs: Vec<X509>,
+}
+
+impl CertData {
+    fn load(path: &Path, password: Option<&str>) -> anyhow::Result<Self> {
+        let data = std::fs::read(path)?;
+        if let Ok(pkcs12) = Pkcs12::from_der(&data) {
+            let parsed = pkcs12.parse2(
+                password
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("No password provided for PKCS12!"))?,
+            )?;
+            if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
+                let mut certs = vec![cert];
+                if let Some(ca) = parsed.ca {
+                    certs.extend(ca.into_iter());
+                }
+                Ok(CertData { pkey, certs })
+            } else {
+                return Err(anyhow!("No certificate chain found in the PKCS12!"));
+            }
+        } else if let (Ok(pkey), Ok(stack)) = (
+            PKey::private_key_from_pem(&data),
+            X509::stack_from_pem(&data),
+        ) {
+            Ok(CertData {
+                pkey,
+                certs: stack.into_iter().map(Into::into).collect(),
+            })
+        } else {
+            return Err(anyhow!("Unknown certificate file format!"));
+        }
+    }
+
+    pub fn issuer(&self) -> Bytes {
+        self.certs
+            .first()
+            .and_then(|c| c.issuer_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    pub fn subject(&self) -> Bytes {
+        self.certs
+            .first()
+            .and_then(|c| c.subject_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    pub fn certs(&self) -> Vec<Bytes> {
+        self.certs
+            .iter()
+            .flat_map(|c| c.to_der().map(|c| c.into()))
+            .collect()
+    }
+
+    pub fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        let mut buf = vec![0u8; self.pkey.size() * 2];
+        let size = self
+            .pkey
+            .rsa()?
+            .private_encrypt(data, &mut buf, Padding::PKCS1)?;
+
+        Ok(Bytes::copy_from_slice(&buf[0..size]))
+    }
+}
+
 pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
     cipher: Cipher,
+    cert_data: Option<CertData>,
 }
 
 impl Crypto {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(identity: Identity) -> anyhow::Result<Self> {
+        let cert_data = if let Identity::Certificate { path, password } = identity {
+            Some(CertData::load(&path, password.as_deref())?)
+        } else {
+            None
+        };
+
         let p = BigNum::from_slice(G2_P)?;
         let dh2 = Dh::from_pqg(p, None, BigNum::from_u32(2)?)?.generate_key()?;
         Ok(Self {
             dh2,
             digest: MessageDigest::sha256(),
             cipher: Cipher::aes_256_cbc(),
+            cert_data,
         })
     }
 
@@ -126,5 +212,9 @@ impl Crypto {
 
     pub fn hash_len(&self) -> usize {
         self.digest.size()
+    }
+
+    pub fn cert_data(&self) -> Option<&CertData> {
+        self.cert_data.as_ref()
     }
 }

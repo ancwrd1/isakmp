@@ -18,10 +18,9 @@ use tokio::{
 };
 use tracing_subscriber::EnvFilter;
 
-use isakmp::model::IkeAttributeType;
 use isakmp::{
     ikev1::Ikev1,
-    model::{ConfigAttributeType, EspAttributeType},
+    model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
     payload::AttributesPayload,
     session::Ikev1Session,
     transport::UdpTransport,
@@ -142,7 +141,7 @@ async fn do_user_name(
         .0)
 }
 
-async fn handle_id_reply(
+async fn handle_auth_reply(
     ikev1: &mut Ikev1<UdpTransport>,
     payload: AttributesPayload,
     message_id: u32,
@@ -176,6 +175,14 @@ async fn main() -> anyhow::Result<()> {
         .nth(1)
         .ok_or_else(|| anyhow!("Missing required server address"))?;
 
+    let identity = match std::env::args().nth(2) {
+        Some(arg) => Identity::Certificate {
+            path: arg.into(),
+            password: Some("changeit".to_owned()),
+        },
+        None => Identity::None,
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -190,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
-    let session = Arc::new(RwLock::new(Ikev1Session::new()?));
+    let session = Arc::new(RwLock::new(Ikev1Session::new(identity.clone())?));
     let transport = UdpTransport::new(udp, session.clone());
     let mut ikev1 = Ikev1::new(transport, session.clone())?;
 
@@ -211,36 +218,38 @@ async fn main() -> anyhow::Result<()> {
 
     ikev1.do_key_exchange(my_addr, gateway_addr).await?;
 
-    let (mut id_reply, message_id) = ikev1
+    ikev1
         .do_identity_protection(Bytes::from_static(CCC_ID))
         .await?;
 
-    println!("{:#?}", id_reply);
+    if matches!(identity, Identity::None) {
+        let (mut auth_attrs, message_id) = ikev1.get_auth_attributes().await?;
 
-    let status = loop {
-        id_reply = handle_id_reply(&mut ikev1, id_reply, message_id).await?;
-        println!("{:#?}", id_reply);
-        let status = id_reply
-            .attributes
-            .iter()
-            .find_map(|a| match a.attribute_type.into() {
-                ConfigAttributeType::Status => a.as_short(),
-                _ => None,
-            });
-        if let Some(status) = status {
-            break status;
+        let status = loop {
+            auth_attrs = handle_auth_reply(&mut ikev1, auth_attrs, message_id).await?;
+            println!("{:#?}", auth_attrs);
+            let status = auth_attrs
+                .attributes
+                .iter()
+                .find_map(|a| match a.attribute_type.into() {
+                    ConfigAttributeType::Status => a.as_short(),
+                    _ => None,
+                });
+            if let Some(status) = status {
+                break status;
+            }
+        };
+
+        if status != 1 {
+            return Err(anyhow!("Authentication failed!"));
         }
-    };
 
-    if status != 1 {
-        return Err(anyhow!("Authentication failed!"));
+        ikev1
+            .send_ack_response(auth_attrs.identifier, message_id)
+            .await?;
+
+        println!("Authentication succeeded!");
     }
-
-    println!("Authentication succeeded!");
-
-    ikev1
-        .send_ack_response(id_reply.identifier, message_id)
-        .await?;
 
     let om_reply = ikev1.send_om_request().await?;
 
