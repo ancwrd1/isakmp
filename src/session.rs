@@ -127,7 +127,7 @@ impl Ikev1Session {
 
         if self.s_key_id_e.len() < self.crypto.key_len() {
             let mut data = Vec::new();
-            let mut seed = Bytes::new();
+            let mut seed = Bytes::from_static(&[0]);
             while data.len() < self.crypto.key_len() {
                 seed = self.crypto.prf(&self.s_key_id_e, [seed.as_ref()])?;
                 data.extend(&seed);
