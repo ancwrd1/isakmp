@@ -8,10 +8,9 @@ use tracing::{debug, trace};
 
 use session::Ikev1Session;
 
-use crate::session::IsakmpSession;
 use crate::{
     ikev1::session::Ikev1SessionRef, message::IsakmpMessage, model::*, payload::*,
-    transport::IsakmpTransport,
+    session::IsakmpSession, transport::IsakmpTransport,
 };
 
 pub mod codec;
@@ -32,10 +31,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             transport,
             session,
         })
-    }
-
-    pub fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
     }
 
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
