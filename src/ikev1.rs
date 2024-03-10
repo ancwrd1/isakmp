@@ -94,11 +94,11 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
         let mut payloads = vec![sa, vid1, vid2, vid3];
 
         if let Some(cert_data) = self.session.read().cert_data() {
-            payloads.push(Payload::Certificate(CertificatePayload {
+            payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
                 data: cert_data.issuer(),
             }));
-            payloads.push(Payload::Certificate(CertificatePayload {
+            payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
                 data: Default::default(),
             }));

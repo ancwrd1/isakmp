@@ -527,6 +527,7 @@ pub enum Payload {
     Identification(IdentificationPayload),
     Hash(BasicPayload),
     Certificate(CertificatePayload),
+    CertificateRequest(CertificatePayload),
     Signature(BasicPayload),
     Attributes(AttributesPayload),
     Natd(BasicPayload),
@@ -548,7 +549,7 @@ impl Payload {
             | Payload::Natd(ref p)
             | Payload::Signature(ref p) => p.to_bytes(),
             Payload::Identification(ref p) => p.to_bytes(),
-            Payload::Certificate(ref p) => p.to_bytes(),
+            Payload::Certificate(ref p) | Payload::CertificateRequest(ref p) => p.to_bytes(),
             Payload::Attributes(ref p) => p.to_bytes(),
             Payload::Other(_, p) => p.to_bytes(),
         }
@@ -568,7 +569,7 @@ impl Payload {
             | Payload::Natd(ref p)
             | Payload::Signature(ref p) => p.len(),
             Payload::Identification(ref p) => p.len(),
-            Payload::Certificate(ref p) => p.len(),
+            Payload::Certificate(ref p) | Payload::CertificateRequest(ref p) => p.len(),
             Payload::Attributes(ref p) => p.len(),
             Payload::Other(_, ref p) => p.len(),
         }
@@ -602,6 +603,9 @@ impl Payload {
             PayloadType::Certificate => {
                 Ok(Payload::Certificate(CertificatePayload::parse(reader)?))
             }
+            PayloadType::CertificateRequest => Ok(Payload::CertificateRequest(
+                CertificatePayload::parse(reader)?,
+            )),
             PayloadType::Attributes => Ok(Payload::Attributes(AttributesPayload::parse(reader)?)),
             _ => Ok(Payload::Other(next_payload, BasicPayload::parse(reader)?)),
         }
@@ -620,6 +624,7 @@ impl Payload {
             Self::Identification(_) => PayloadType::Identification,
             Self::Hash(_) => PayloadType::Hash,
             Self::Certificate(_) => PayloadType::Certificate,
+            Self::CertificateRequest(_) => PayloadType::CertificateRequest,
             Self::Signature(_) => PayloadType::Signature,
             Self::Attributes(_) => PayloadType::Attributes,
             Self::Natd(_) => PayloadType::Natd,
