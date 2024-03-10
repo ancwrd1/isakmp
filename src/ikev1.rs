@@ -33,6 +33,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         })
     }
 
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
