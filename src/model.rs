@@ -754,11 +754,7 @@ impl DataAttribute {
         buf.freeze()
     }
     pub fn len(&self) -> usize {
-        4 + if self.value.len() == 2 {
-            0
-        } else {
-            self.value.len()
-        }
+        4 + if self.value.len() == 2 { 0 } else { self.value.len() }
     }
 
     pub fn is_empty(&self) -> bool {

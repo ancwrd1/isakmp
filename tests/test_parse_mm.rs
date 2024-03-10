@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
-use isakmp::{message::IsakmpMessage, model::Identity};
 use isakmp::ikev1::session::Ikev1Session;
+use isakmp::{message::IsakmpMessage, model::Identity};
 
 const DATA: &[u8] = include_bytes!("mm.bin");
 

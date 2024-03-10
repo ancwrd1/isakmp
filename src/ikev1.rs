@@ -6,11 +6,9 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use rand::random;
 use tracing::{debug, trace};
 
-use session::Ikev1Session;
-
 use crate::{
-    ikev1::session::Ikev1SessionRef, message::IsakmpMessage, model::*, payload::*,
-    session::IsakmpSession, transport::IsakmpTransport,
+    ikev1::session::Ikev1SyncedSession, message::IsakmpMessage, model::*, payload::*, session::IsakmpSession,
+    transport::IsakmpTransport,
 };
 
 pub mod codec;
@@ -21,11 +19,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Ikev1Service<T> {
     socket_timeout: Duration,
     transport: T,
-    session: Ikev1SessionRef,
+    session: Ikev1SyncedSession,
 }
 
 impl<T: IsakmpTransport + Send> Ikev1Service<T> {
-    pub fn new(transport: T, session: Ikev1SessionRef) -> anyhow::Result<Self> {
+    pub fn new(transport: T, session: Ikev1SyncedSession) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -54,16 +52,13 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     ),
                     DataAttribute::short(
                         IkeAttributeType::AuthenticationMethod.into(),
-                        if self.session.read().cert_data().is_some() {
+                        if self.session.0.read().cert_data().is_some() {
                             IkeAuthMethod::RsaSignature.into()
                         } else {
                             IkeAuthMethod::HybridInitRsa.into()
                         },
                     ),
-                    DataAttribute::short(
-                        IkeAttributeType::LifeType.into(),
-                        LifeType::Seconds.into(),
-                    ),
+                    DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
                     DataAttribute::long(
                         IkeAttributeType::LifeDuration.into(),
                         Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
@@ -98,7 +93,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let mut payloads = vec![sa, vid1, vid2, vid3];
 
-        if let Some(cert_data) = self.session.read().cert_data() {
+        if let Some(cert_data) = self.session.0.read().cert_data() {
             payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
                 data: cert_data.issuer(),
@@ -110,7 +105,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         }
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.read().cookie_i,
+            cookie_i: self.session.cookie_i(),
             cookie_r: 0,
             version: 0x10,
             exchange_type: ExchangeType::IdentityProtection,
@@ -133,18 +128,12 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         for auth in [EspAuthAlgorithm::HmacSha256] {
             for key_len in [256] {
                 let attributes = vec![
-                    DataAttribute::short(
-                        EspAttributeType::LifeType.into(),
-                        LifeType::Seconds.into(),
-                    ),
+                    DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
                     DataAttribute::long(
                         EspAttributeType::LifeDuration.into(),
                         Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
                     ),
-                    DataAttribute::short(
-                        EspAttributeType::AuthenticationAlgorithm.into(),
-                        auth.into(),
-                    ),
+                    DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
                     DataAttribute::short(
                         EspAttributeType::EncapsulationMode.into(),
                         EspEncapMode::UdpTunnel.into(),
@@ -190,36 +179,25 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let message_id: u32 = random();
 
-        let session = self.session.read();
-
         let hash_payload = self.make_hash_from_payloads(
-            &session,
             message_id,
             &[&sa_payload, &nonce_payload, &ip_payload, &netmask_payload],
         )?;
 
         let message = IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
-            payloads: vec![
-                hash_payload,
-                sa_payload,
-                nonce_payload,
-                ip_payload,
-                netmask_payload,
-            ],
+            payloads: vec![hash_payload, sa_payload, nonce_payload, ip_payload, netmask_payload],
         };
 
         Ok(message)
     }
 
     fn build_delete_sa(&mut self) -> anyhow::Result<IsakmpMessage> {
-        let session = self.session.read();
-
         let message_id = random();
 
         let delete_payload = Payload::Delete(DeletePayload {
@@ -227,17 +205,16 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             protocol_id: ProtocolId::Isakmp,
             spi_size: 16,
             spi: vec![
-                Bytes::copy_from_slice(session.cookie_i.to_be_bytes().as_slice()),
-                Bytes::copy_from_slice(session.cookie_r.to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(self.session.cookie_i().to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(self.session.cookie_r().to_be_bytes().as_slice()),
             ],
         });
 
-        let hash_payload =
-            self.make_hash_from_payloads(&session, message_id, &[&delete_payload])?;
+        let hash_payload = self.make_hash_from_payloads(message_id, &[&delete_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Informational,
             flags: IsakmpFlags::empty(),
@@ -247,16 +224,14 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     }
 
     fn build_ke(&self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<IsakmpMessage> {
-        let session = self.session.read();
-
-        let ke = Payload::KeyExchange(session.public_key_i.as_ref().into());
-        let nonce = Payload::Nonce(session.nonce_i.as_ref().into());
+        let ke = Payload::KeyExchange(self.session.0.read().public_key_i.as_ref().into());
+        let nonce = Payload::Nonce(self.session.0.read().nonce_i.as_ref().into());
 
         let remote_ip: u32 = gateway_ip.into();
 
-        let hash_r = session.hash([
-            session.cookie_i.to_be_bytes().as_slice(),
-            session.cookie_r.to_be_bytes().as_slice(),
+        let hash_r = self.session.hash([
+            self.session.cookie_i().to_be_bytes().as_slice(),
+            self.session.cookie_r().to_be_bytes().as_slice(),
             remote_ip.to_be_bytes().as_slice(),
             4500u16.to_be_bytes().as_slice(),
         ])?;
@@ -265,9 +240,9 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let local_ip: u32 = local_ip.into();
 
-        let hash_i = session.hash([
-            session.cookie_i.to_be_bytes().as_slice(),
-            session.cookie_r.to_be_bytes().as_slice(),
+        let hash_i = self.session.hash([
+            self.session.cookie_i().to_be_bytes().as_slice(),
+            self.session.cookie_r().to_be_bytes().as_slice(),
             local_ip.to_be_bytes().as_slice(),
             &[0, 0],
         ])?;
@@ -275,8 +250,8 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let natd_i_payload = Payload::Natd(BasicPayload::new(hash_i));
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
@@ -286,9 +261,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     }
 
     fn build_id_protection(&self, notify_data: Bytes) -> anyhow::Result<IsakmpMessage> {
-        let session = self.session.read();
-
-        let id_payload = if let Some(cert_data) = session.cert_data() {
+        let id_payload = if let Some(cert_data) = self.session.0.read().cert_data() {
             Payload::Identification(IdentificationPayload {
                 id_type: IdentityType::DerAsn1Dn.into(),
                 data: cert_data.subject(),
@@ -305,18 +278,19 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             doi: 0,
             protocol_id: ProtocolId::Isakmp,
             message_type: NotifyMessageType::CccAuth.into(),
-            spi: session
-                .cookie_i
+            spi: self
+                .session
+                .cookie_i()
                 .to_be_bytes()
                 .into_iter()
-                .chain(session.cookie_r.to_be_bytes())
+                .chain(self.session.0.read().cookie_r.to_be_bytes())
                 .collect(),
             data: notify_data,
         });
 
-        let hash_i = session.hash_i(id_payload.to_bytes().as_ref())?;
+        let hash_i = self.session.0.read().hash_i(id_payload.to_bytes().as_ref())?;
 
-        let payloads = if let Some(cert_data) = session.cert_data() {
+        let payloads = if let Some(cert_data) = self.session.0.read().cert_data() {
             let mut payloads = vec![id_payload];
 
             payloads.extend(cert_data.certs().into_iter().map(|cert| {
@@ -338,8 +312,8 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         };
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::ENCRYPTION,
@@ -359,21 +333,16 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             attributes_payload_type: AttributesPayloadType::Reply,
             identifier,
             attributes: vec![
-                DataAttribute::short(
-                    ConfigAttributeType::AuthType.into(),
-                    UserAuthType::Generic.into(),
-                ),
+                DataAttribute::short(ConfigAttributeType::AuthType.into(), UserAuthType::Generic.into()),
                 DataAttribute::long(attribute_type.into(), data),
             ],
         });
 
-        let session = self.session.read();
-
-        let hash_payload = self.make_hash_from_payloads(&session, message_id, &[&attrs_payload])?;
+        let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -389,13 +358,11 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             attributes: vec![DataAttribute::short(ConfigAttributeType::Status.into(), 1)],
         });
 
-        let session = self.session.read();
-
-        let hash_payload = self.make_hash_from_payloads(&session, message_id, &[&attrs_payload])?;
+        let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -431,13 +398,11 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let message_id: u32 = random();
 
-        let session = self.session.read();
-
-        let hash_payload = self.make_hash_from_payloads(&session, message_id, &[&attrs_payload])?;
+        let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: session.cookie_i,
-            cookie_r: session.cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -446,12 +411,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         })
     }
 
-    fn make_hash_from_payloads(
-        &self,
-        session: &Ikev1Session,
-        message_id: u32,
-        payloads: &[&Payload],
-    ) -> anyhow::Result<Payload> {
+    fn make_hash_from_payloads(&self, message_id: u32, payloads: &[&Payload]) -> anyhow::Result<Payload> {
         let mut buf = BytesMut::new();
         for (i, payload) in payloads.iter().enumerate() {
             let data = payload.to_bytes();
@@ -466,40 +426,30 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         }
         let data = buf.freeze();
 
-        let hash = session.crypto.prf(
-            &session.s_key_id_a,
+        let hash = self.session.0.read().crypto.prf(
+            &self.session.0.read().s_key_id_a,
             [message_id.to_be_bytes().as_slice(), &data],
         )?;
 
         Ok(Payload::Hash(BasicPayload::new(hash)))
     }
 
-    pub async fn do_sa_proposal(
-        &mut self,
-        lifetime: Duration,
-    ) -> anyhow::Result<Vec<DataAttribute>> {
+    pub async fn do_sa_proposal(&mut self, lifetime: Duration) -> anyhow::Result<Vec<DataAttribute>> {
         debug!("Begin SA proposal");
 
         let request = self.build_ike_sa(lifetime)?;
         let sa_bytes = request.payloads[0].to_bytes();
 
-        let response = self
-            .transport
-            .send_receive(&request, self.socket_timeout)
-            .await?;
+        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         let attributes = response
             .payloads
             .into_iter()
             .find_map(|p| match p {
-                Payload::SecurityAssociation(payload) => {
-                    payload.payloads.into_iter().find_map(|p| match p {
-                        Payload::Proposal(proposal) => {
-                            proposal.transforms.into_iter().next().map(|t| t.attributes)
-                        }
-                        _ => None,
-                    })
-                }
+                Payload::SecurityAssociation(payload) => payload.payloads.into_iter().find_map(|p| match p {
+                    Payload::Proposal(proposal) => proposal.transforms.into_iter().next().map(|t| t.attributes),
+                    _ => None,
+                }),
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No attributes in response!"))?;
@@ -531,7 +481,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         debug!("Negotiated SA key length: {}", key_len);
 
         self.session
-            .write()
             .init_from_sa(response.cookie_r, sa_bytes, hash_alg, key_len)?;
 
         debug!("End SA proposal");
@@ -539,19 +488,12 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok(attributes)
     }
 
-    pub async fn do_key_exchange(
-        &mut self,
-        local_ip: Ipv4Addr,
-        gateway_ip: Ipv4Addr,
-    ) -> anyhow::Result<()> {
+    pub async fn do_key_exchange(&mut self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<()> {
         debug!("Begin key exchange");
 
         let request = self.build_ke(local_ip, gateway_ip)?;
 
-        let response = self
-            .transport
-            .send_receive(&request, self.socket_timeout)
-            .await?;
+        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         let public_key_r = response
             .payloads
@@ -575,20 +517,17 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         trace!("Responder's nonce length: {}", nonce_r.len());
 
-        self.session.write().init_from_ke(public_key_r, nonce_r)?;
+        self.session.init_from_ke(public_key_r, nonce_r)?;
 
-        trace!("COOKIE_i: {:08x}", self.session.read().cookie_i);
-        trace!("SKEYID_e: {}", hex::encode(&self.session.read().s_key_id_e));
+        trace!("COOKIE_i: {:08x}", self.session.cookie_i());
+        trace!("SKEYID_e: {}", hex::encode(&self.session.0.read().s_key_id_e));
 
         debug!("End key exchange");
 
         Ok(())
     }
 
-    fn get_attributes_payload(
-        &mut self,
-        response: IsakmpMessage,
-    ) -> anyhow::Result<AttributesPayload> {
+    fn get_attributes_payload(&mut self, response: IsakmpMessage) -> anyhow::Result<AttributesPayload> {
         response
             .payloads
             .into_iter()
@@ -611,18 +550,12 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok((self.get_attributes_payload(attr_response)?, message_id))
     }
 
-    pub async fn do_identity_protection(
-        &mut self,
-        notify_data: Bytes,
-    ) -> anyhow::Result<IdentificationPayload> {
+    pub async fn do_identity_protection(&mut self, notify_data: Bytes) -> anyhow::Result<IdentificationPayload> {
         debug!("Begin identity protection");
 
         let request = self.build_id_protection(notify_data)?;
 
-        let response = self
-            .transport
-            .send_receive(&request, self.socket_timeout)
-            .await?;
+        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         Ok(response
             .payloads
@@ -663,11 +596,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok((config, message_id))
     }
 
-    pub async fn send_ack_response(
-        &mut self,
-        identifier: u16,
-        message_id: u32,
-    ) -> anyhow::Result<()> {
+    pub async fn send_ack_response(&mut self, identifier: u16, message_id: u32) -> anyhow::Result<()> {
         debug!("Sending ACK response");
         let request = self.build_ack_cfg(identifier, message_id)?;
         self.transport.send(&request).await?;
@@ -679,10 +608,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         debug!("Begin sending OM request");
 
         let request = self.build_om_cfg()?;
-        let response = self
-            .transport
-            .send_receive(&request, self.socket_timeout)
-            .await?;
+        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         debug!("End sending OM request");
 
@@ -701,10 +627,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let request = self.build_esp_sa(spi_i, &nonce_i, ipaddr, lifetime)?;
 
-        let response = self
-            .transport
-            .send_receive(&request, self.socket_timeout)
-            .await?;
+        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         let nonce_r = response
             .payloads
@@ -719,14 +642,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             .payloads
             .iter()
             .find_map(|p| match p {
-                Payload::SecurityAssociation(payload) => {
-                    payload.payloads.iter().find_map(|p| match p {
-                        Payload::Proposal(proposal) => {
-                            proposal.spi.clone().reader().read_u32::<BigEndian>().ok()
-                        }
-                        _ => None,
-                    })
-                }
+                Payload::SecurityAssociation(payload) => payload.payloads.iter().find_map(|p| match p {
+                    Payload::Proposal(proposal) => proposal.spi.clone().reader().read_u32::<BigEndian>().ok(),
+                    _ => None,
+                }),
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No proposal payload in response!"))?;
@@ -735,26 +654,17 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             .payloads
             .into_iter()
             .find_map(|p| match p {
-                Payload::SecurityAssociation(payload) => {
-                    payload.payloads.into_iter().find_map(|p| match p {
-                        Payload::Proposal(proposal) => {
-                            proposal.transforms.into_iter().next().map(|t| t.attributes)
-                        }
-                        _ => None,
-                    })
-                }
+                Payload::SecurityAssociation(payload) => payload.payloads.into_iter().find_map(|p| match p {
+                    Payload::Proposal(proposal) => proposal.transforms.into_iter().next().map(|t| t.attributes),
+                    _ => None,
+                }),
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No attributes in response!"))?;
 
-        let prf = self.session.read().crypto.prf(
-            self.session.read().s_key_id_a.as_ref(),
-            [
-                &[0],
-                response.message_id.to_be_bytes().as_slice(),
-                &nonce_i,
-                &nonce_r,
-            ],
+        let prf = self.session.0.read().crypto.prf(
+            self.session.0.read().s_key_id_a.as_ref(),
+            [&[0], response.message_id.to_be_bytes().as_slice(), &nonce_i, &nonce_r],
         )?;
 
         let auth_alg: EspAuthAlgorithm = attributes
@@ -785,8 +695,8 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         debug!("Negotiated ESP key length: {}", key_len);
 
         let hash_msg = IsakmpMessage {
-            cookie_i: self.session.read().cookie_i,
-            cookie_r: self.session.read().cookie_r,
+            cookie_i: self.session.cookie_i(),
+            cookie_r: self.session.cookie_r(),
             version: 0x10,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
@@ -797,10 +707,9 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         self.transport.send(&hash_msg).await?;
 
         self.session
-            .write()
             .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, auth_alg, key_len)?;
 
-        let session = self.session.read();
+        let session = self.session.0.read();
 
         trace!("IN  SPI : {:04x}", session.esp_in.spi);
         trace!("IN  ENC : {}", hex::encode(&session.esp_in.sk_e));

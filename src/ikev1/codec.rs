@@ -94,8 +94,6 @@ impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
     }
 
     fn compute_hash(&self, data: &[u8]) -> Bytes {
-        self.session
-            .hash([data])
-            .expect("Hash computation should not fail!")
+        self.session.hash([data]).expect("Hash computation should not fail!")
     }
 }

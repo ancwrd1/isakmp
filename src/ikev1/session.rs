@@ -20,9 +20,45 @@ impl Ikev1SyncedSession {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
         Ok(Self(Arc::new(RwLock::new(Ikev1Session::new(identity)?))))
     }
+
+    pub fn init_from_sa(
+        &mut self,
+        cookie_r: u64,
+        sa_bytes: Bytes,
+        hash_alg: IkeHashAlgorithm,
+        key_len: usize,
+    ) -> anyhow::Result<()> {
+        self.0.write().init_from_sa(cookie_r, sa_bytes, hash_alg, key_len)
+    }
+
+    pub fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
+        self.0.write().init_from_ke(public_key_r, nonce_r)
+    }
+
+    pub fn init_from_qm(
+        &mut self,
+        spi_i: u32,
+        nonce_i: Bytes,
+        spi_r: u32,
+        nonce_r: Bytes,
+        auth_alg: EspAuthAlgorithm,
+        key_len: usize,
+    ) -> anyhow::Result<()> {
+        self.0
+            .write()
+            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, auth_alg, key_len)
+    }
 }
 
 impl IsakmpSession for Ikev1SyncedSession {
+    fn cookie_i(&self) -> u64 {
+        self.0.read().cookie_i()
+    }
+
+    fn cookie_r(&self) -> u64 {
+        self.0.read().cookie_r()
+    }
+
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         self.0.write().encrypt_and_set_iv(data, id)
     }
@@ -76,6 +112,14 @@ pub struct Ikev1Session {
 }
 
 impl IsakmpSession for Ikev1Session {
+    fn cookie_i(&self) -> u64 {
+        self.cookie_i
+    }
+
+    fn cookie_r(&self) -> u64 {
+        self.cookie_r
+    }
+
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         let iv = self.retrieve_iv(id);
 
@@ -290,10 +334,7 @@ impl Ikev1Session {
         self.iv
             .entry(message_id)
             .or_insert_with(|| {
-                let mut hash = self
-                    .crypto
-                    .hash([zero_iv.as_ref(), &message_id.to_be_bytes()])
-                    .unwrap();
+                let mut hash = self.crypto.hash([zero_iv.as_ref(), &message_id.to_be_bytes()]).unwrap();
                 hash.truncate(self.crypto.block_size());
                 hash
             })

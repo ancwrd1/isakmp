@@ -34,8 +34,7 @@ const CCC_ID: &[u8] = b"(\n\
                :selected_realm_id (vpn_Azure_Authentication))";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
-    static OTP_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*"#).unwrap());
+    static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*"#).unwrap());
 
     let tcp = TcpListener::bind("127.0.0.1:7779").await?;
     let (mut stream, _) = tcp.accept().await?;
@@ -154,13 +153,7 @@ async fn handle_auth_reply(
         .next();
 
     if username_attr.is_some() {
-        do_user_name(
-            ikev1,
-            ConfigAttributeType::UserName,
-            payload.identifier,
-            message_id,
-        )
-        .await
+        do_user_name(ikev1, ConfigAttributeType::UserName, payload.identifier, message_id).await
     } else if let Some(attr) = challenge_attr {
         do_challenge_attr(ikev1, attr, payload.identifier, message_id).await
     } else {
@@ -199,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
     let session = Ikev1SyncedSession::new(identity.clone())?;
 
     let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
-    let mut service = Ikev1Service::new(transport, session.0)?;
+    let mut service = Ikev1Service::new(transport, session)?;
 
     let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
@@ -218,9 +211,7 @@ async fn main() -> anyhow::Result<()> {
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
-    service
-        .do_identity_protection(Bytes::from_static(CCC_ID))
-        .await?;
+    service.do_identity_protection(Bytes::from_static(CCC_ID)).await?;
 
     if matches!(identity, Identity::None) {
         let (mut auth_attrs, message_id) = service.get_auth_attributes().await?;
@@ -244,9 +235,7 @@ async fn main() -> anyhow::Result<()> {
             return Err(anyhow!("Authentication failed!"));
         }
 
-        service
-            .send_ack_response(auth_attrs.identifier, message_id)
-            .await?;
+        service.send_ack_response(auth_attrs.identifier, message_id).await?;
 
         println!("Authentication succeeded!");
     }
@@ -289,9 +278,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| String::from_utf8_lossy(&v).into_owned())
         .unwrap_or_default();
 
-    let attributes = service
-        .do_esp_proposal(ipv4addr, Duration::from_secs(60))
-        .await?;
+    let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;
 
     println!("{:#?}", attributes);
 
@@ -344,23 +331,18 @@ mod util {
         T: AsRef<OsStr>,
     {
         let mut command = Command::new(command.as_ref().as_os_str());
-        command
-            .envs(vec![("LANG", "C"), ("LC_ALL", "C")])
-            .args(args);
+        command.envs(vec![("LANG", "C"), ("LC_ALL", "C")]).args(args);
 
         process_output(command.output().await?)
     }
 
     pub async fn get_default_ip() -> anyhow::Result<String> {
-        let default_route =
-            crate::util::run_command("ip", ["-4", "route", "show", "default"]).await?;
+        let default_route = crate::util::run_command("ip", ["-4", "route", "show", "default"]).await?;
         let mut parts = default_route.split_whitespace();
         while let Some(part) = parts.next() {
             if part == "dev" {
                 if let Some(dev) = parts.next() {
-                    let addr =
-                        crate::util::run_command("ip", ["-4", "-o", "addr", "show", "dev", dev])
-                            .await?;
+                    let addr = crate::util::run_command("ip", ["-4", "-o", "addr", "show", "dev", dev]).await?;
                     let mut parts = addr.split_whitespace();
                     while let Some(part) = parts.next() {
                         if part == "inet" {

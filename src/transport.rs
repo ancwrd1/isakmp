@@ -20,11 +20,7 @@ pub trait IsakmpTransport {
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage>;
 
-    async fn send_receive(
-        &mut self,
-        message: &IsakmpMessage,
-        timeout: Duration,
-    ) -> anyhow::Result<IsakmpMessage> {
+    async fn send_receive(&mut self, message: &IsakmpMessage, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
         self.send(message).await?;
         self.receive(timeout).await
     }
@@ -74,8 +70,7 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
         let mut receive_buffer = [0u8; 65536];
         let received_message = loop {
-            let (size, _) =
-                tokio::time::timeout(timeout, self.socket.recv_from(&mut receive_buffer)).await??;
+            let (size, _) = tokio::time::timeout(timeout, self.socket.recv_from(&mut receive_buffer)).await??;
 
             let port = self.socket.peer_addr()?.port();
 
@@ -110,9 +105,7 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
                 for payload in &msg.payloads {
                     if let Payload::Notification(notify) = payload {
                         if notify.message_type == 31 || notify.message_type == 9101 {
-                            return Err(
-                                anyhow!(String::from_utf8_lossy(&notify.data).into_owned()),
-                            );
+                            return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
                         } else if notify.message_type < 31 {
                             return Err(anyhow!("IKE notify error {}", notify.message_type));
                         }

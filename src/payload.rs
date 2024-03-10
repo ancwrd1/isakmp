@@ -6,8 +6,8 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tracing::trace;
 
 use crate::model::{
-    AttributesPayloadType, CertificateType, DataAttribute, PayloadType, ProtocolId, Situation,
-    SituationData, SituationFlags, TransformId,
+    AttributesPayloadType, CertificateType, DataAttribute, PayloadType, ProtocolId, Situation, SituationData,
+    SituationFlags, TransformId,
 };
 
 pub trait PayloadLike: Sized {
@@ -104,60 +104,57 @@ impl PayloadLike for SecurityAssociationPayload {
                 secrecy_len + integrity_len
             })
             .unwrap_or(0);
-        self.payloads
-            .iter()
-            .fold(sit_len, |len, p| 4 + len + p.len())
+        self.payloads.iter().fold(sit_len, |len, p| 4 + len + p.len())
     }
 
     fn parse<R: Read>(reader: &mut R) -> anyhow::Result<Self> {
         let doi = reader.read_u32::<BigEndian>()?;
         let situation_flags = SituationFlags::from_bits_retain(reader.read_u32::<BigEndian>()?);
 
-        let situation =
-            if situation_flags.contains(SituationFlags::SECRECY | SituationFlags::INTEGRITY) {
-                let mut situation = Situation {
-                    labeled_domain_identifier: reader.read_u32::<BigEndian>()?,
-                    secrecy: None,
-                    integrity: None,
-                };
-                if situation_flags.contains(SituationFlags::SECRECY) {
-                    let level_length = reader.read_u16::<BigEndian>()?;
-                    reader.read_u16::<BigEndian>()?;
-                    let mut level_data = vec![0u8; level_length as usize];
-                    reader.read_exact(&mut level_data)?;
-
-                    let category_length = reader.read_u16::<BigEndian>()?;
-                    reader.read_u16::<BigEndian>()?;
-                    let mut category_data = vec![0u8; category_length as usize];
-                    reader.read_exact(&mut category_data)?;
-
-                    situation.secrecy = Some(SituationData {
-                        level: level_data.into(),
-                        category: category_data.into(),
-                    });
-                }
-
-                if situation_flags.contains(SituationFlags::INTEGRITY) {
-                    let level_length = reader.read_u16::<BigEndian>()?;
-                    reader.read_u16::<BigEndian>()?;
-                    let mut level_data = vec![0u8; level_length as usize];
-                    reader.read_exact(&mut level_data)?;
-
-                    let category_length = reader.read_u16::<BigEndian>()?;
-                    reader.read_u16::<BigEndian>()?;
-                    let mut category_data = vec![0u8; category_length as usize];
-                    reader.read_exact(&mut category_data)?;
-
-                    situation.integrity = Some(SituationData {
-                        level: level_data.into(),
-                        category: category_data.into(),
-                    });
-                }
-
-                Some(situation)
-            } else {
-                None
+        let situation = if situation_flags.contains(SituationFlags::SECRECY | SituationFlags::INTEGRITY) {
+            let mut situation = Situation {
+                labeled_domain_identifier: reader.read_u32::<BigEndian>()?,
+                secrecy: None,
+                integrity: None,
             };
+            if situation_flags.contains(SituationFlags::SECRECY) {
+                let level_length = reader.read_u16::<BigEndian>()?;
+                reader.read_u16::<BigEndian>()?;
+                let mut level_data = vec![0u8; level_length as usize];
+                reader.read_exact(&mut level_data)?;
+
+                let category_length = reader.read_u16::<BigEndian>()?;
+                reader.read_u16::<BigEndian>()?;
+                let mut category_data = vec![0u8; category_length as usize];
+                reader.read_exact(&mut category_data)?;
+
+                situation.secrecy = Some(SituationData {
+                    level: level_data.into(),
+                    category: category_data.into(),
+                });
+            }
+
+            if situation_flags.contains(SituationFlags::INTEGRITY) {
+                let level_length = reader.read_u16::<BigEndian>()?;
+                reader.read_u16::<BigEndian>()?;
+                let mut level_data = vec![0u8; level_length as usize];
+                reader.read_exact(&mut level_data)?;
+
+                let category_length = reader.read_u16::<BigEndian>()?;
+                reader.read_u16::<BigEndian>()?;
+                let mut category_data = vec![0u8; category_length as usize];
+                reader.read_exact(&mut category_data)?;
+
+                situation.integrity = Some(SituationData {
+                    level: level_data.into(),
+                    category: category_data.into(),
+                });
+            }
+
+            Some(situation)
+        } else {
+            None
+        };
         let payloads = Payload::parse_all(PayloadType::Proposal, reader)?;
         Ok(Self {
             doi,
@@ -348,10 +345,7 @@ impl PayloadLike for DeletePayload {
             doi,
             protocol_id,
             spi_size: spi_len,
-            spi: spi_data
-                .chunks(spi_len as _)
-                .map(Bytes::copy_from_slice)
-                .collect(),
+            spi: spi_data.chunks(spi_len as _).map(Bytes::copy_from_slice).collect(),
         })
     }
 }
@@ -582,30 +576,22 @@ impl Payload {
 
     fn parse<R: Read>(next_payload: PayloadType, reader: &mut R) -> anyhow::Result<Self> {
         match next_payload {
-            PayloadType::SecurityAssociation => Ok(Payload::SecurityAssociation(
-                SecurityAssociationPayload::parse(reader)?,
-            )),
+            PayloadType::SecurityAssociation => {
+                Ok(Payload::SecurityAssociation(SecurityAssociationPayload::parse(reader)?))
+            }
             PayloadType::Proposal => Ok(Payload::Proposal(ProposalPayload::parse(reader)?)),
             PayloadType::Transform => Ok(Payload::Transform(TransformPayload::parse(reader)?)),
-            PayloadType::Notification => {
-                Ok(Payload::Notification(NotificationPayload::parse(reader)?))
-            }
+            PayloadType::Notification => Ok(Payload::Notification(NotificationPayload::parse(reader)?)),
             PayloadType::Delete => Ok(Payload::Delete(DeletePayload::parse(reader)?)),
             PayloadType::VendorId => Ok(Payload::VendorId(BasicPayload::parse(reader)?)),
             PayloadType::KeyExchange => Ok(Payload::KeyExchange(BasicPayload::parse(reader)?)),
             PayloadType::Nonce => Ok(Payload::Nonce(BasicPayload::parse(reader)?)),
-            PayloadType::Identification => Ok(Payload::Identification(
-                IdentificationPayload::parse(reader)?,
-            )),
+            PayloadType::Identification => Ok(Payload::Identification(IdentificationPayload::parse(reader)?)),
             PayloadType::Hash => Ok(Payload::Hash(BasicPayload::parse(reader)?)),
             PayloadType::Natd => Ok(Payload::Natd(BasicPayload::parse(reader)?)),
             PayloadType::Signature => Ok(Payload::Signature(BasicPayload::parse(reader)?)),
-            PayloadType::Certificate => {
-                Ok(Payload::Certificate(CertificatePayload::parse(reader)?))
-            }
-            PayloadType::CertificateRequest => Ok(Payload::CertificateRequest(
-                CertificatePayload::parse(reader)?,
-            )),
+            PayloadType::Certificate => Ok(Payload::Certificate(CertificatePayload::parse(reader)?)),
+            PayloadType::CertificateRequest => Ok(Payload::CertificateRequest(CertificatePayload::parse(reader)?)),
             PayloadType::Attributes => Ok(Payload::Attributes(AttributesPayload::parse(reader)?)),
             _ => Ok(Payload::Other(next_payload, BasicPayload::parse(reader)?)),
         }
@@ -632,10 +618,7 @@ impl Payload {
         }
     }
 
-    pub fn parse_all<R: Read>(
-        next_payload: PayloadType,
-        reader: &mut R,
-    ) -> anyhow::Result<Vec<Payload>> {
+    pub fn parse_all<R: Read>(next_payload: PayloadType, reader: &mut R) -> anyhow::Result<Vec<Payload>> {
         let mut result = Vec::new();
         let mut next_payload = next_payload;
         while next_payload != PayloadType::None {
