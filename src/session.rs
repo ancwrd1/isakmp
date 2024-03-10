@@ -4,6 +4,24 @@ use std::sync::Arc;
 
 use crate::model::EspCryptMaterial;
 
+#[derive(Default)]
+pub struct SessionKeys {
+    pub shared_secret: Bytes,
+    pub skeyid: Bytes,
+    pub skeyid_d: Bytes,
+    pub skeyid_a: Bytes,
+    pub skeyid_e: Bytes,
+}
+
+#[derive(Default)]
+pub struct EndpointData {
+    pub cookie: u64,
+    pub public_key: Bytes,
+    pub nonce: Bytes,
+    pub esp_nonce: Bytes,
+    pub esp_spi: u32,
+}
+
 pub trait IsakmpSession {
     fn cookie_i(&self) -> u64;
     fn cookie_r(&self) -> u64;

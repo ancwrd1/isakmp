@@ -228,8 +228,8 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     }
 
     fn build_ke(&self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<IsakmpMessage> {
-        let ke = Payload::KeyExchange(self.session.0.read().public_key_i.as_ref().into());
-        let nonce = Payload::Nonce(self.session.0.read().nonce_i.as_ref().into());
+        let ke = Payload::KeyExchange(self.session.0.read().initiator.public_key.as_ref().into());
+        let nonce = Payload::Nonce(self.session.0.read().initiator.nonce.as_ref().into());
 
         let remote_ip: u32 = gateway_ip.into();
 
@@ -287,7 +287,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 .cookie_i()
                 .to_be_bytes()
                 .into_iter()
-                .chain(self.session.0.read().cookie_r.to_be_bytes())
+                .chain(self.session.0.read().responder.cookie.to_be_bytes())
                 .collect(),
             data: notify_data,
         });
@@ -431,7 +431,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let data = buf.freeze();
 
         let hash = self.session.0.read().crypto.prf(
-            &self.session.0.read().s_key_id_a,
+            &self.session.0.read().session_keys.skeyid_a,
             [message_id.to_be_bytes().as_slice(), &data],
         )?;
 
@@ -524,7 +524,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         self.session.init_from_ke(public_key_r, nonce_r)?;
 
         trace!("COOKIE_i: {:08x}", self.session.cookie_i());
-        trace!("SKEYID_e: {}", hex::encode(&self.session.0.read().s_key_id_e));
+        trace!(
+            "SKEYID_e: {}",
+            hex::encode(&self.session.0.read().session_keys.skeyid_e)
+        );
 
         debug!("End key exchange");
 
@@ -667,7 +670,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             .ok_or_else(|| anyhow!("No attributes in response!"))?;
 
         let prf = self.session.0.read().crypto.prf(
-            self.session.0.read().s_key_id_a.as_ref(),
+            self.session.0.read().session_keys.skeyid_a.as_ref(),
             [&[0], response.message_id.to_be_bytes().as_slice(), &nonce_i, &nonce_r],
         )?;
 
