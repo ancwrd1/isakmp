@@ -1,15 +1,16 @@
-use anyhow::anyhow;
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{io::Cursor, time::Duration};
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use parking_lot::RwLock;
 use tokio::net::UdpSocket;
 use tracing::{debug, trace};
 
-use crate::model::ExchangeType;
-use crate::payload::Payload;
-use crate::{message::IsakmpMessage, session::Ikev1Session};
+use crate::{
+    message::{IsakmpMessage, IsakmpMessageCodec},
+    model::ExchangeType,
+    payload::Payload,
+};
 
 const NATT_PORT: u16 = 4500;
 
@@ -31,26 +32,26 @@ pub trait IsakmpTransport {
     fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
 }
 
-pub struct UdpTransport {
+pub struct UdpTransport<C> {
     socket: UdpSocket,
-    session: Arc<RwLock<Ikev1Session>>,
+    codec: C,
     received_hashes: Vec<Bytes>,
 }
 
-impl UdpTransport {
-    pub fn new(socket: UdpSocket, session: Arc<RwLock<Ikev1Session>>) -> Self {
+impl<C> UdpTransport<C> {
+    pub fn new(socket: UdpSocket, codec: C) -> Self {
         Self {
             socket,
-            session,
+            codec,
             received_hashes: Vec::new(),
         }
     }
 }
 
 #[async_trait]
-impl IsakmpTransport for UdpTransport {
+impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
-        let data = message.to_bytes(&mut self.session.write());
+        let data = self.codec.encode(message);
         debug!(
             "Sending ISAKMP message of size {} to {}",
             data.len(),
@@ -93,7 +94,7 @@ impl IsakmpTransport for UdpTransport {
     }
 
     fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
-        let hash = self.session.read().crypto.hash([&data])?;
+        let hash = self.codec.compute_hash(data);
 
         if self.received_hashes.contains(&hash) {
             trace!("Discarding already received message");
@@ -103,7 +104,8 @@ impl IsakmpTransport for UdpTransport {
             debug!("Parsing ISAKMP message of size {}", data.len());
             let mut reader = Cursor::new(&data);
 
-            let msg = IsakmpMessage::parse(&mut reader, &mut self.session.write())?;
+            let msg = self.codec.decode(&mut reader)?;
+
             if msg.exchange_type == ExchangeType::Informational {
                 for payload in &msg.payloads {
                     if let Payload::Notification(notify) = payload {

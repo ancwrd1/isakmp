@@ -1,7 +1,6 @@
 use std::{
     io::{stdin, stdout, Write},
     net::{IpAddr, Ipv4Addr},
-    sync::Arc,
     time::Duration,
 };
 
@@ -9,7 +8,6 @@ use anyhow::anyhow;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use regex::Regex;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,12 +17,18 @@ use tokio::{
 use tracing_subscriber::EnvFilter;
 
 use isakmp::{
-    ikev1::Ikev1,
+    ikev1::{
+        codec::Ikev1Codec,
+        session::{Ikev1Session, Ikev1SessionRef},
+        Ikev1Service,
+    },
     model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
     payload::AttributesPayload,
-    session::Ikev1Session,
+    session::IsakmpSession,
     transport::UdpTransport,
 };
+
+type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<SessionWrapper>>>;
 
 const CCC_ID: &[u8] = b"(\n\
                :clientType (TRAC)\n\
@@ -78,7 +82,7 @@ fn get_attribute(payload: &AttributesPayload, attr: ConfigAttributeType) -> Vec<
 }
 
 async fn do_challenge_attr(
-    ikev1: &mut Ikev1<UdpTransport>,
+    ikev1: &mut Ikev1Udp,
     attr: Bytes,
     identifier: u16,
     message_id: u32,
@@ -119,7 +123,7 @@ async fn do_challenge_attr(
 }
 
 async fn do_user_name(
-    ikev1: &mut Ikev1<UdpTransport>,
+    ikev1: &mut Ikev1Udp,
     attr_type: ConfigAttributeType,
     identifier: u16,
     message_id: u32,
@@ -142,7 +146,7 @@ async fn do_user_name(
 }
 
 async fn handle_auth_reply(
-    ikev1: &mut Ikev1<UdpTransport>,
+    ikev1: &mut Ikev1Udp,
     payload: AttributesPayload,
     message_id: u32,
 ) -> anyhow::Result<AttributesPayload> {
@@ -166,6 +170,33 @@ async fn handle_auth_reply(
         do_challenge_attr(ikev1, attr, payload.identifier, message_id).await
     } else {
         Err(anyhow!("Unknown reply!"))
+    }
+}
+
+#[derive(Clone)]
+struct SessionWrapper {
+    session: Ikev1SessionRef,
+}
+
+impl IsakmpSession for SessionWrapper {
+    fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.session.write().encrypt_and_set_iv(data, id)
+    }
+
+    fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.session.write().decrypt_and_set_iv(data, id)
+    }
+
+    fn cipher_block_size(&self) -> usize {
+        self.session.read().cipher_block_size()
+    }
+
+    fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<[u8]>,
+    {
+        self.session.read().hash(data)
     }
 }
 
@@ -197,11 +228,14 @@ async fn main() -> anyhow::Result<()> {
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
-    let session = Arc::new(RwLock::new(Ikev1Session::new(identity.clone())?));
-    let transport = UdpTransport::new(udp, session.clone());
-    let mut ikev1 = Ikev1::new(transport, session.clone())?;
+    let session = SessionWrapper {
+        session: Ikev1Session::new(identity.clone())?,
+    };
 
-    let attributes = ikev1.do_sa_proposal(Duration::from_secs(120)).await?;
+    let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
+    let mut service = Ikev1Service::new(transport, session.session)?;
+
+    let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
     let lifetime = attributes
         .iter()
@@ -216,17 +250,17 @@ async fn main() -> anyhow::Result<()> {
 
     println!("IKE lifetime: {}", lifetime);
 
-    ikev1.do_key_exchange(my_addr, gateway_addr).await?;
+    service.do_key_exchange(my_addr, gateway_addr).await?;
 
-    ikev1
+    service
         .do_identity_protection(Bytes::from_static(CCC_ID))
         .await?;
 
     if matches!(identity, Identity::None) {
-        let (mut auth_attrs, message_id) = ikev1.get_auth_attributes().await?;
+        let (mut auth_attrs, message_id) = service.get_auth_attributes().await?;
 
         let status = loop {
-            auth_attrs = handle_auth_reply(&mut ikev1, auth_attrs, message_id).await?;
+            auth_attrs = handle_auth_reply(&mut service, auth_attrs, message_id).await?;
             println!("{:#?}", auth_attrs);
             let status = auth_attrs
                 .attributes
@@ -244,14 +278,14 @@ async fn main() -> anyhow::Result<()> {
             return Err(anyhow!("Authentication failed!"));
         }
 
-        ikev1
+        service
             .send_ack_response(auth_attrs.identifier, message_id)
             .await?;
 
         println!("Authentication succeeded!");
     }
 
-    let om_reply = ikev1.send_om_request().await?;
+    let om_reply = service.send_om_request().await?;
 
     println!("{:#?}", om_reply);
 
@@ -289,7 +323,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|v| String::from_utf8_lossy(&v).into_owned())
         .unwrap_or_default();
 
-    let attributes = ikev1
+    let attributes = service
         .do_esp_proposal(ipv4addr, Duration::from_secs(60))
         .await?;
 
@@ -313,7 +347,7 @@ async fn main() -> anyhow::Result<()> {
     println!("DNS:         {:?}", dns);
     println!("Domains:     {}", search_domains);
 
-    ikev1.delete_sa().await?;
+    service.delete_sa().await?;
 
     Ok(())
 }

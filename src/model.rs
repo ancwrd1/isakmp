@@ -1,5 +1,4 @@
-use std::io::Read;
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -882,4 +881,12 @@ pub enum Identity {
     },
     #[default]
     None,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct EspCryptMaterial {
+    pub spi: u32,
+    pub sk_e: Bytes,
+    pub sk_a: Bytes,
+    pub auth_algorithm: EspAuthAlgorithm,
 }

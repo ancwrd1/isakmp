@@ -1,26 +1,32 @@
-use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use std::{net::Ipv4Addr, time::Duration};
 
 use anyhow::anyhow;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use parking_lot::RwLock;
 use rand::random;
 use tracing::{debug, trace};
 
+use session::Ikev1Session;
+
+use crate::session::IsakmpSession;
 use crate::{
-    message::IsakmpMessage, model::*, payload::*, session::Ikev1Session, transport::IsakmpTransport,
+    ikev1::session::Ikev1SessionRef, message::IsakmpMessage, model::*, payload::*,
+    transport::IsakmpTransport,
 };
+
+pub mod codec;
+pub mod session;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub struct Ikev1<T> {
+pub struct Ikev1Service<T> {
     socket_timeout: Duration,
     transport: T,
-    session: Arc<RwLock<Ikev1Session>>,
+    session: Ikev1SessionRef,
 }
 
-impl<T: IsakmpTransport + Send> Ikev1<T> {
-    pub fn new(transport: T, session: Arc<RwLock<Ikev1Session>>) -> anyhow::Result<Self> {
+impl<T: IsakmpTransport + Send> Ikev1Service<T> {
+    pub fn new(transport: T, session: Ikev1SessionRef) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -249,7 +255,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let remote_ip: u32 = gateway_ip.into();
 
-        let hash_r = session.crypto.hash([
+        let hash_r = session.hash([
             session.cookie_i.to_be_bytes().as_slice(),
             session.cookie_r.to_be_bytes().as_slice(),
             remote_ip.to_be_bytes().as_slice(),
@@ -260,7 +266,7 @@ impl<T: IsakmpTransport + Send> Ikev1<T> {
 
         let local_ip: u32 = local_ip.into();
 
-        let hash_i = session.crypto.hash([
+        let hash_i = session.hash([
             session.cookie_i.to_be_bytes().as_slice(),
             session.cookie_r.to_be_bytes().as_slice(),
             local_ip.to_be_bytes().as_slice(),
