@@ -44,11 +44,11 @@ impl IsakmpSession for Ikev1SyncedSession {
     }
 
     fn esp_in(&self) -> EspCryptMaterial {
-        self.0.read().esp_in.clone()
+        self.0.read().esp_in()
     }
 
     fn esp_out(&self) -> EspCryptMaterial {
-        self.0.read().esp_out.clone()
+        self.0.read().esp_out()
     }
 }
 
