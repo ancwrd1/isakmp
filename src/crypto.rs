@@ -77,7 +77,7 @@ impl ClientCertificate {
     }
 
     pub fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        let mut buf = vec![0u8; self.pkey.size() * 2];
+        let mut buf = vec![0u8; self.pkey.size()];
         let size = self.pkey.rsa()?.private_encrypt(data, &mut buf, Padding::PKCS1)?;
 
         Ok(Bytes::copy_from_slice(&buf[0..size]))
