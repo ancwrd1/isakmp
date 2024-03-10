@@ -17,7 +17,7 @@ use tokio::{
 use tracing_subscriber::EnvFilter;
 
 use isakmp::{
-    ikev1::{codec::Ikev1Codec, session::Ikev1SyncedSession, Ikev1Service},
+    ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1SyncedSession},
     model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
     payload::AttributesPayload,
     transport::UdpTransport,

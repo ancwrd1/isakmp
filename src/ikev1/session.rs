@@ -11,10 +11,10 @@ use crate::{
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
 
-pub(crate) type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
+type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
 
 #[derive(Clone)]
-pub struct Ikev1SyncedSession(pub(crate) Ikev1SessionRef);
+pub struct Ikev1SyncedSession(Ikev1SessionRef);
 
 impl Ikev1SyncedSession {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
@@ -51,14 +51,6 @@ impl Ikev1SyncedSession {
 }
 
 impl IsakmpSession for Ikev1SyncedSession {
-    fn cookie_i(&self) -> u64 {
-        self.0.read().cookie_i()
-    }
-
-    fn cookie_r(&self) -> u64 {
-        self.0.read().cookie_r()
-    }
-
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         self.0.write().encrypt_and_set_iv(data, id)
     }
@@ -79,6 +71,18 @@ impl IsakmpSession for Ikev1SyncedSession {
         self.0.read().hash(data)
     }
 
+    fn hash_id(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        self.0.read().hash_id(data)
+    }
+
+    fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<[u8]>,
+    {
+        self.0.read().prf(key, data)
+    }
+
     fn esp_in(&self) -> Arc<EspCryptMaterial> {
         self.0.read().esp_in()
     }
@@ -90,28 +94,32 @@ impl IsakmpSession for Ikev1SyncedSession {
     fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
         self.0.read().client_certificate()
     }
+
+    fn initiator(&self) -> Arc<EndpointData> {
+        self.0.read().initiator()
+    }
+
+    fn responder(&self) -> Arc<EndpointData> {
+        self.0.read().responder()
+    }
+
+    fn session_keys(&self) -> Arc<SessionKeys> {
+        self.0.read().session_keys()
+    }
 }
 
-pub(crate) struct Ikev1Session {
-    pub(crate) crypto: Crypto,
-    pub(crate) initiator: EndpointData,
-    pub(crate) responder: EndpointData,
-    pub(crate) session_keys: SessionKeys,
-    pub(crate) iv: HashMap<u32, Bytes>,
-    pub(crate) sa_bytes: Bytes,
-    pub(crate) esp_in: Arc<EspCryptMaterial>,
-    pub(crate) esp_out: Arc<EspCryptMaterial>,
+struct Ikev1Session {
+    crypto: Crypto,
+    initiator: Arc<EndpointData>,
+    responder: Arc<EndpointData>,
+    session_keys: Arc<SessionKeys>,
+    iv: HashMap<u32, Bytes>,
+    sa_bytes: Bytes,
+    esp_in: Arc<EspCryptMaterial>,
+    esp_out: Arc<EspCryptMaterial>,
 }
 
 impl IsakmpSession for Ikev1Session {
-    fn cookie_i(&self) -> u64 {
-        self.initiator.cookie
-    }
-
-    fn cookie_r(&self) -> u64 {
-        self.responder.cookie
-    }
-
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         let iv = self.retrieve_iv(id);
 
@@ -150,6 +158,29 @@ impl IsakmpSession for Ikev1Session {
         self.crypto.hash(data)
     }
 
+    fn hash_id(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        // RFC2409: HASH_I = prf(SKEYID, g^xi | g^xr | CKY-I | CKY-R | SAi_b | IDii_b )
+        self.crypto.prf(
+            &self.session_keys.skeyid,
+            [
+                self.initiator.public_key.as_ref(),
+                self.responder.public_key.as_ref(),
+                &self.initiator.cookie.to_be_bytes(),
+                &self.responder.cookie.to_be_bytes(),
+                self.sa_bytes.as_ref(),
+                data,
+            ],
+        )
+    }
+
+    fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<[u8]>,
+    {
+        self.crypto.prf(key, data)
+    }
+
     fn esp_in(&self) -> Arc<EspCryptMaterial> {
         self.esp_in.clone()
     }
@@ -161,6 +192,18 @@ impl IsakmpSession for Ikev1Session {
     fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
         self.crypto.client_certificate()
     }
+
+    fn initiator(&self) -> Arc<EndpointData> {
+        self.initiator.clone()
+    }
+
+    fn responder(&self) -> Arc<EndpointData> {
+        self.responder.clone()
+    }
+
+    fn session_keys(&self) -> Arc<SessionKeys> {
+        self.session_keys.clone()
+    }
 }
 
 impl Ikev1Session {
@@ -170,12 +213,12 @@ impl Ikev1Session {
         let nonce: [u8; 32] = random();
         Ok(Self {
             crypto,
-            initiator: EndpointData {
+            initiator: Arc::new(EndpointData {
                 cookie: random(),
                 public_key,
                 nonce: Bytes::copy_from_slice(&nonce),
                 ..Default::default()
-            },
+            }),
             responder: Default::default(),
             session_keys: Default::default(),
             iv: Default::default(),
@@ -192,7 +235,11 @@ impl Ikev1Session {
         hash_alg: IkeHashAlgorithm,
         key_len: usize,
     ) -> anyhow::Result<()> {
-        self.responder.cookie = cookie_r;
+        self.responder = Arc::new(EndpointData {
+            cookie: cookie_r,
+            ..(*self.responder).clone()
+        });
+
         self.sa_bytes = sa_bytes;
 
         self.crypto.init_cipher(key_len);
@@ -206,9 +253,16 @@ impl Ikev1Session {
     }
 
     pub fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
-        self.responder.public_key = public_key_r;
-        self.responder.nonce = nonce_r;
-        self.session_keys.shared_secret = self.crypto.shared_secret(&self.responder.public_key)?;
+        self.responder = Arc::new(EndpointData {
+            public_key: public_key_r,
+            nonce: nonce_r,
+            ..(*self.responder).clone()
+        });
+
+        self.session_keys = Arc::new(SessionKeys {
+            shared_secret: self.crypto.shared_secret(&self.responder.public_key)?,
+            ..(*self.session_keys).clone()
+        });
 
         let key = self
             .initiator
@@ -219,7 +273,7 @@ impl Ikev1Session {
             .collect::<Bytes>();
 
         // RFC2409: SKEYID = prf(Ni_b | Nr_b, g^xy)
-        self.session_keys.skeyid = self.crypto.prf(&key, [&self.session_keys.shared_secret])?;
+        let skeyid = self.crypto.prf(&key, [&self.session_keys.shared_secret])?;
 
         let mut data = Vec::new();
         let mut seed = Bytes::new();
@@ -227,7 +281,7 @@ impl Ikev1Session {
         // SKEYID_{d,a,e}
         for i in 0..3 {
             seed = self.crypto.prf(
-                &self.session_keys.skeyid,
+                &skeyid,
                 [
                     seed.as_ref(),
                     self.session_keys.shared_secret.as_ref(),
@@ -240,22 +294,31 @@ impl Ikev1Session {
         }
 
         let hash_len = self.crypto.hash_len();
-        self.session_keys.skeyid_d = Bytes::copy_from_slice(&data[0..hash_len]);
-        self.session_keys.skeyid_a = Bytes::copy_from_slice(&data[hash_len..hash_len * 2]);
-        self.session_keys.skeyid_e = Bytes::copy_from_slice(&data[hash_len * 2..]);
 
-        if self.session_keys.skeyid_e.len() < self.crypto.key_len() {
+        let skeyid_d = Bytes::copy_from_slice(&data[0..hash_len]);
+        let skeyid_a = Bytes::copy_from_slice(&data[hash_len..hash_len * 2]);
+        let mut skeyid_e = Bytes::copy_from_slice(&data[hash_len * 2..]);
+
+        if skeyid_e.len() < self.crypto.key_len() {
             let mut data = Vec::new();
             let mut seed = Bytes::from_static(&[0]);
             while data.len() < self.crypto.key_len() {
-                seed = self.crypto.prf(&self.session_keys.skeyid_e, [seed.as_ref()])?;
+                seed = self.crypto.prf(&skeyid_e, [seed.as_ref()])?;
                 data.extend(&seed);
             }
             data.truncate(self.crypto.key_len());
-            self.session_keys.skeyid_e = data.into();
+            skeyid_e = data.into();
         } else {
-            self.session_keys.skeyid_e.truncate(self.crypto.key_len());
+            skeyid_e.truncate(self.crypto.key_len());
         }
+
+        self.session_keys = Arc::new(SessionKeys {
+            skeyid,
+            skeyid_d,
+            skeyid_a,
+            skeyid_e,
+            ..(*self.session_keys).clone()
+        });
 
         let mut iv = self
             .crypto
@@ -311,10 +374,18 @@ impl Ikev1Session {
         auth_alg: EspAuthAlgorithm,
         key_len: usize,
     ) -> anyhow::Result<()> {
-        self.initiator.esp_spi = spi_i;
-        self.responder.esp_spi = spi_r;
-        self.initiator.esp_nonce = nonce_i;
-        self.responder.esp_nonce = nonce_r;
+        self.initiator = Arc::new(EndpointData {
+            esp_spi: spi_i,
+            esp_nonce: nonce_i,
+            ..(*self.initiator).clone()
+        });
+
+        self.responder = Arc::new(EndpointData {
+            esp_spi: spi_r,
+            esp_nonce: nonce_r,
+            ..(*self.initiator).clone()
+        });
+
         self.esp_in = Arc::new(self.gen_esp_material(self.initiator.esp_spi, auth_alg, key_len)?);
         self.esp_out = Arc::new(self.gen_esp_material(self.responder.esp_spi, auth_alg, key_len)?);
 
@@ -331,20 +402,5 @@ impl Ikev1Session {
                 hash
             })
             .clone()
-    }
-
-    pub fn hash_i(&self, id_bytes: &[u8]) -> anyhow::Result<Bytes> {
-        // RFC2409: HASH_I = prf(SKEYID, g^xi | g^xr | CKY-I | CKY-R | SAi_b | IDii_b )
-        self.crypto.prf(
-            &self.session_keys.skeyid,
-            [
-                self.initiator.public_key.as_ref(),
-                self.responder.public_key.as_ref(),
-                &self.initiator.cookie.to_be_bytes(),
-                &self.responder.cookie.to_be_bytes(),
-                self.sa_bytes.as_ref(),
-                id_bytes,
-            ],
-        )
     }
 }
