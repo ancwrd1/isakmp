@@ -42,6 +42,14 @@ impl IsakmpSession for Ikev1SyncedSession {
     {
         self.0.read().hash(data)
     }
+
+    fn esp_in(&self) -> EspCryptMaterial {
+        self.0.read().esp_in.clone()
+    }
+
+    fn esp_out(&self) -> EspCryptMaterial {
+        self.0.read().esp_out.clone()
+    }
 }
 
 pub struct Ikev1Session {
@@ -104,6 +112,14 @@ impl IsakmpSession for Ikev1Session {
         T: AsRef<[u8]>,
     {
         self.crypto.hash(data)
+    }
+
+    fn esp_in(&self) -> EspCryptMaterial {
+        self.esp_in.clone()
+    }
+
+    fn esp_out(&self) -> EspCryptMaterial {
+        self.esp_out.clone()
     }
 }
 

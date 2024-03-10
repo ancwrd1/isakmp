@@ -1,5 +1,7 @@
 use bytes::Bytes;
 
+use crate::model::EspCryptMaterial;
+
 pub trait IsakmpSession {
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
     fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
@@ -8,4 +10,6 @@ pub trait IsakmpSession {
     where
         I: IntoIterator<Item = T>,
         T: AsRef<[u8]>;
+    fn esp_in(&self) -> EspCryptMaterial;
+    fn esp_out(&self) -> EspCryptMaterial;
 }
