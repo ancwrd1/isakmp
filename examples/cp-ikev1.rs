@@ -190,7 +190,6 @@ async fn main() -> anyhow::Result<()> {
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
     let session = Ikev1SyncedSession::new(identity.clone())?;
-
     let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
     let mut service = Ikev1Service::new(transport, session)?;
 

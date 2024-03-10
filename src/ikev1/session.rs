@@ -14,7 +14,7 @@ use crate::{
 pub type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
 
 #[derive(Clone)]
-pub struct Ikev1SyncedSession(pub Ikev1SessionRef);
+pub struct Ikev1SyncedSession(pub(crate) Ikev1SessionRef);
 
 impl Ikev1SyncedSession {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {

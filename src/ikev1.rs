@@ -35,6 +35,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         &mut self.transport
     }
 
+    pub fn session(&self) -> Ikev1SyncedSession {
+        self.session.clone()
+    }
+
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
