@@ -17,18 +17,13 @@ use tokio::{
 use tracing_subscriber::EnvFilter;
 
 use isakmp::{
-    ikev1::{
-        codec::Ikev1Codec,
-        session::{Ikev1Session, Ikev1SessionRef},
-        Ikev1Service,
-    },
+    ikev1::{codec::Ikev1Codec, session::Ikev1SyncedSession, Ikev1Service},
     model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
     payload::AttributesPayload,
-    session::IsakmpSession,
     transport::UdpTransport,
 };
 
-type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<SessionWrapper>>>;
+type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<Ikev1SyncedSession>>>;
 
 const CCC_ID: &[u8] = b"(\n\
                :clientType (TRAC)\n\
@@ -173,33 +168,6 @@ async fn handle_auth_reply(
     }
 }
 
-#[derive(Clone)]
-struct SessionWrapper {
-    session: Ikev1SessionRef,
-}
-
-impl IsakmpSession for SessionWrapper {
-    fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        self.session.write().encrypt_and_set_iv(data, id)
-    }
-
-    fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        self.session.write().decrypt_and_set_iv(data, id)
-    }
-
-    fn cipher_block_size(&self) -> usize {
-        self.session.read().cipher_block_size()
-    }
-
-    fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<[u8]>,
-    {
-        self.session.read().hash(data)
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let address = std::env::args()
@@ -228,12 +196,10 @@ async fn main() -> anyhow::Result<()> {
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
-    let session = SessionWrapper {
-        session: Ikev1Session::new(identity.clone())?,
-    };
+    let session = Ikev1SyncedSession::new(identity.clone())?;
 
     let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
-    let mut service = Ikev1Service::new(transport, session.session)?;
+    let mut service = Ikev1Service::new(transport, session.0)?;
 
     let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
 

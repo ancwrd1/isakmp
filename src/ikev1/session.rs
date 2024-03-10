@@ -13,6 +13,37 @@ use crate::{
 
 pub type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
 
+#[derive(Clone)]
+pub struct Ikev1SyncedSession(pub Ikev1SessionRef);
+
+impl Ikev1SyncedSession {
+    pub fn new(identity: Identity) -> anyhow::Result<Self> {
+        Ok(Self(Arc::new(RwLock::new(Ikev1Session::new(identity)?))))
+    }
+}
+
+impl IsakmpSession for Ikev1SyncedSession {
+    fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.0.write().encrypt_and_set_iv(data, id)
+    }
+
+    fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.0.write().decrypt_and_set_iv(data, id)
+    }
+
+    fn cipher_block_size(&self) -> usize {
+        self.0.read().cipher_block_size()
+    }
+
+    fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<[u8]>,
+    {
+        self.0.read().hash(data)
+    }
+}
+
 pub struct Ikev1Session {
     pub crypto: Crypto,
     pub cookie_i: u64,
@@ -77,11 +108,11 @@ impl IsakmpSession for Ikev1Session {
 }
 
 impl Ikev1Session {
-    pub fn new(identity: Identity) -> anyhow::Result<Ikev1SessionRef> {
+    fn new(identity: Identity) -> anyhow::Result<Self> {
         let crypto = Crypto::new(identity)?;
         let public_key_i = crypto.public_key();
         let nonce_i: [u8; 32] = random();
-        Ok(Arc::new(RwLock::new(Self {
+        Ok(Self {
             crypto,
             cookie_i: rand::thread_rng().next_u64(),
             cookie_r: 0,
@@ -102,7 +133,7 @@ impl Ikev1Session {
             esp_spi_r: 0,
             esp_in: Default::default(),
             esp_out: Default::default(),
-        })))
+        })
     }
 
     pub fn init_from_sa(
