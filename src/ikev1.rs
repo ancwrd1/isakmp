@@ -56,7 +56,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     ),
                     DataAttribute::short(
                         IkeAttributeType::AuthenticationMethod.into(),
-                        if self.session.0.read().cert_data().is_some() {
+                        if self.session.client_certificate().is_some() {
                             IkeAuthMethod::RsaSignature.into()
                         } else {
                             IkeAuthMethod::HybridInitRsa.into()
@@ -97,10 +97,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let mut payloads = vec![sa, vid1, vid2, vid3];
 
-        if let Some(cert_data) = self.session.0.read().cert_data() {
+        if let Some(client_cert) = self.session.client_certificate() {
             payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
-                data: cert_data.issuer(),
+                data: client_cert.issuer(),
             }));
             payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
@@ -265,10 +265,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     }
 
     fn build_id_protection(&self, notify_data: Bytes) -> anyhow::Result<IsakmpMessage> {
-        let id_payload = if let Some(cert_data) = self.session.0.read().cert_data() {
+        let id_payload = if let Some(client_cert) = self.session.client_certificate() {
             Payload::Identification(IdentificationPayload {
                 id_type: IdentityType::DerAsn1Dn.into(),
-                data: cert_data.subject(),
+                data: client_cert.subject(),
                 ..Default::default()
             })
         } else {
@@ -294,17 +294,17 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let hash_i = self.session.0.read().hash_i(id_payload.to_bytes().as_ref())?;
 
-        let payloads = if let Some(cert_data) = self.session.0.read().cert_data() {
+        let payloads = if let Some(client_cert) = self.session.client_certificate() {
             let mut payloads = vec![id_payload];
 
-            payloads.extend(cert_data.certs().into_iter().map(|cert| {
+            payloads.extend(client_cert.certs().into_iter().map(|cert| {
                 Payload::Certificate(CertificatePayload {
                     certificate_type: CertificateType::X509ForSignature,
                     data: cert,
                 })
             }));
 
-            let sig_payload = Payload::Signature(BasicPayload::new(cert_data.sign(&hash_i)?));
+            let sig_payload = Payload::Signature(BasicPayload::new(client_cert.sign(&hash_i)?));
 
             payloads.push(sig_payload);
             payloads.push(notify_payload);
@@ -561,14 +561,14 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
-        Ok(response
+        response
             .payloads
             .into_iter()
             .find_map(|payload| match payload {
                 Payload::Identification(id) => Some(id),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No identification payload in response!"))?)
+            .ok_or_else(|| anyhow!("No identification payload in response!"))
     }
 
     pub async fn send_auth_attribute(

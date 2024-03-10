@@ -1,4 +1,6 @@
+use crate::crypto::ClientCertificate;
 use bytes::Bytes;
+use std::sync::Arc;
 
 use crate::model::EspCryptMaterial;
 
@@ -12,6 +14,7 @@ pub trait IsakmpSession {
     where
         I: IntoIterator<Item = T>,
         T: AsRef<[u8]>;
-    fn esp_in(&self) -> EspCryptMaterial;
-    fn esp_out(&self) -> EspCryptMaterial;
+    fn esp_in(&self) -> Arc<EspCryptMaterial>;
+    fn esp_out(&self) -> Arc<EspCryptMaterial>;
+    fn client_certificate(&self) -> Option<Arc<ClientCertificate>>;
 }

@@ -1,14 +1,17 @@
 use std::io::Cursor;
 
-use isakmp::ikev1::session::Ikev1Session;
-use isakmp::{message::IsakmpMessage, model::Identity};
+use isakmp::{
+    ikev1::{codec::Ikev1Codec, session::Ikev1SyncedSession},
+    message::IsakmpMessageCodec,
+    model::Identity,
+};
 
 const DATA: &[u8] = include_bytes!("mm.bin");
 
 #[test]
 fn test_parse_main_mode() {
     let mut reader = Cursor::new(DATA);
-    let mut session = Ikev1Session::new(Identity::None).unwrap();
-    let msg = IsakmpMessage::parse(&mut reader, &mut session).unwrap();
+    let session = Ikev1SyncedSession::new(Identity::None).unwrap();
+    let msg = Ikev1Codec::new(session).decode(&mut reader).unwrap();
     println!("{:#?}", msg);
 }

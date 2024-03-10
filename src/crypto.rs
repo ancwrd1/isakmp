@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -26,36 +27,32 @@ const G2_P: &[u8] = &[
     255, 255,
 ];
 
-pub struct CertData {
+pub struct ClientCertificate {
     pkey: PKey<Private>,
     certs: Vec<X509>,
 }
 
-impl CertData {
+impl ClientCertificate {
     fn load(path: &Path, password: Option<&str>) -> anyhow::Result<Self> {
         let data = std::fs::read(path)?;
         if let Ok(pkcs12) = Pkcs12::from_der(&data) {
-            let parsed = pkcs12.parse2(
-                password
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("No password provided for PKCS12!"))?,
-            )?;
+            let parsed = pkcs12.parse2(password.ok_or_else(|| anyhow!("No password provided for PKCS12!"))?)?;
             if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
                 let mut certs = vec![cert];
                 if let Some(ca) = parsed.ca {
-                    certs.extend(ca.into_iter());
+                    certs.extend(ca);
                 }
-                Ok(CertData { pkey, certs })
+                Ok(ClientCertificate { pkey, certs })
             } else {
-                return Err(anyhow!("No certificate chain found in the PKCS12!"));
+                Err(anyhow!("No certificate chain found in the PKCS12!"))
             }
         } else if let (Ok(pkey), Ok(stack)) = (PKey::private_key_from_pem(&data), X509::stack_from_pem(&data)) {
-            Ok(CertData {
+            Ok(ClientCertificate {
                 pkey,
                 certs: stack.into_iter().map(Into::into).collect(),
             })
         } else {
-            return Err(anyhow!("Unknown certificate file format!"));
+            Err(anyhow!("Unknown certificate file format!"))
         }
     }
 
@@ -91,13 +88,13 @@ pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
     cipher: Cipher,
-    cert_data: Option<CertData>,
+    client_cert: Option<Arc<ClientCertificate>>,
 }
 
 impl Crypto {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
-        let cert_data = if let Identity::Certificate { path, password } = identity {
-            Some(CertData::load(&path, password.as_deref())?)
+        let client_cert = if let Identity::Certificate { path, password } = identity {
+            Some(Arc::new(ClientCertificate::load(&path, password.as_deref())?))
         } else {
             None
         };
@@ -108,7 +105,7 @@ impl Crypto {
             dh2,
             digest: MessageDigest::sha256(),
             cipher: Cipher::aes_256_cbc(),
-            cert_data,
+            client_cert,
         })
     }
 
@@ -198,7 +195,7 @@ impl Crypto {
         self.digest.size()
     }
 
-    pub fn cert_data(&self) -> Option<&CertData> {
-        self.cert_data.as_ref()
+    pub fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+        self.client_cert.clone()
     }
 }

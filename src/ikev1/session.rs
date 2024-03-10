@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use rand::{random, RngCore};
 
 use crate::{
-    crypto::{CertData, Crypto},
+    crypto::{ClientCertificate, Crypto},
     model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeHashAlgorithm},
     session::IsakmpSession,
 };
@@ -79,12 +79,16 @@ impl IsakmpSession for Ikev1SyncedSession {
         self.0.read().hash(data)
     }
 
-    fn esp_in(&self) -> EspCryptMaterial {
+    fn esp_in(&self) -> Arc<EspCryptMaterial> {
         self.0.read().esp_in()
     }
 
-    fn esp_out(&self) -> EspCryptMaterial {
+    fn esp_out(&self) -> Arc<EspCryptMaterial> {
         self.0.read().esp_out()
+    }
+
+    fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+        self.0.read().client_certificate()
     }
 }
 
@@ -107,8 +111,8 @@ pub struct Ikev1Session {
     pub esp_nonce_r: Bytes,
     pub esp_spi_i: u32,
     pub esp_spi_r: u32,
-    pub esp_in: EspCryptMaterial,
-    pub esp_out: EspCryptMaterial,
+    pub esp_in: Arc<EspCryptMaterial>,
+    pub esp_out: Arc<EspCryptMaterial>,
 }
 
 impl IsakmpSession for Ikev1Session {
@@ -158,12 +162,16 @@ impl IsakmpSession for Ikev1Session {
         self.crypto.hash(data)
     }
 
-    fn esp_in(&self) -> EspCryptMaterial {
+    fn esp_in(&self) -> Arc<EspCryptMaterial> {
         self.esp_in.clone()
     }
 
-    fn esp_out(&self) -> EspCryptMaterial {
+    fn esp_out(&self) -> Arc<EspCryptMaterial> {
         self.esp_out.clone()
+    }
+
+    fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+        self.crypto.client_certificate()
     }
 }
 
@@ -323,8 +331,8 @@ impl Ikev1Session {
         self.esp_spi_r = spi_r;
         self.esp_nonce_i = nonce_i;
         self.esp_nonce_r = nonce_r;
-        self.esp_in = self.gen_esp_material(self.esp_spi_i, auth_alg, key_len)?;
-        self.esp_out = self.gen_esp_material(self.esp_spi_r, auth_alg, key_len)?;
+        self.esp_in = Arc::new(self.gen_esp_material(self.esp_spi_i, auth_alg, key_len)?);
+        self.esp_out = Arc::new(self.gen_esp_material(self.esp_spi_r, auth_alg, key_len)?);
 
         Ok(())
     }
@@ -354,9 +362,5 @@ impl Ikev1Session {
                 id_bytes,
             ],
         )
-    }
-
-    pub fn cert_data(&self) -> Option<&CertData> {
-        self.crypto.cert_data()
     }
 }
