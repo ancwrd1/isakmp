@@ -243,15 +243,26 @@ pub enum EspAuthAlgorithm {
     HmacSha160,
     #[default]
     HmacSha256,
+    HmacSha256v2,
     Other(u16),
 }
 
 impl EspAuthAlgorithm {
-    pub fn hash_len(&self) -> usize {
+    pub fn key_len(&self) -> usize {
         match self {
             EspAuthAlgorithm::HmacSha96 => 20,
             EspAuthAlgorithm::HmacSha160 => 20,
             EspAuthAlgorithm::HmacSha256 => 32,
+            EspAuthAlgorithm::HmacSha256v2 => 32,
+            EspAuthAlgorithm::Other(_) => 0,
+        }
+    }
+    pub fn hash_len(&self) -> usize {
+        match self {
+            EspAuthAlgorithm::HmacSha96 => 12,
+            EspAuthAlgorithm::HmacSha160 => 20,
+            EspAuthAlgorithm::HmacSha256 => 16,
+            EspAuthAlgorithm::HmacSha256v2 => 16,
             EspAuthAlgorithm::Other(_) => 0,
         }
     }
@@ -263,6 +274,7 @@ impl From<u16> for EspAuthAlgorithm {
             2 => Self::HmacSha96,
             5 => Self::HmacSha256,
             7 => Self::HmacSha160,
+            12 => Self::HmacSha256v2,
             other => Self::Other(other),
         }
     }
@@ -274,6 +286,7 @@ impl From<EspAuthAlgorithm> for u16 {
             EspAuthAlgorithm::HmacSha96 => 2,
             EspAuthAlgorithm::HmacSha256 => 5,
             EspAuthAlgorithm::HmacSha160 => 7,
+            EspAuthAlgorithm::HmacSha256v2 => 12,
             EspAuthAlgorithm::Other(u) => u,
         }
     }
@@ -884,5 +897,6 @@ pub struct EspCryptMaterial {
     pub spi: u32,
     pub sk_e: Bytes,
     pub sk_a: Bytes,
+    pub key_length: usize,
     pub auth_algorithm: EspAuthAlgorithm,
 }

@@ -336,7 +336,7 @@ impl Ikev1Session {
         auth_algorithm: EspAuthAlgorithm,
         key_length: usize,
     ) -> anyhow::Result<EspCryptMaterial> {
-        let keymat_len = key_length + auth_algorithm.hash_len();
+        let keymat_len = key_length + auth_algorithm.key_len();
 
         let mut data = Vec::new();
         let mut seed = Bytes::new();
@@ -362,6 +362,7 @@ impl Ikev1Session {
             sk_e,
             sk_a,
             auth_algorithm,
+            key_length,
         })
     }
 

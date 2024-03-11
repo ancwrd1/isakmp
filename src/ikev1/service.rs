@@ -117,7 +117,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         })
     }
 
-    #[allow(clippy::single_element_loop)]
     fn build_esp_sa(
         &self,
         spi: u32,
@@ -127,8 +126,13 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     ) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
-        for auth in [EspAuthAlgorithm::HmacSha256] {
-            for key_len in [256] {
+        for auth in [
+            EspAuthAlgorithm::HmacSha256v2,
+            EspAuthAlgorithm::HmacSha256,
+            EspAuthAlgorithm::HmacSha160,
+            EspAuthAlgorithm::HmacSha96,
+        ] {
+            for key_len in [256, 128] {
                 let attributes = vec![
                     DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
                     DataAttribute::long(
@@ -717,10 +721,12 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         trace!("IN  SPI : {:04x}", esp_in.spi);
         trace!("IN  ENC : {}", hex::encode(&esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&esp_in.sk_a));
+        trace!("IN  KEYL: {}", esp_in.key_length);
         trace!("IN  ALG : {:?}", esp_in.auth_algorithm);
         trace!("OUT SPI : {:04x}", esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&esp_out.sk_a));
+        trace!("OUT KEYL: {}", esp_out.key_length);
         trace!("OUT ALG : {:?}", esp_out.auth_algorithm);
 
         debug!("End ESP SA proposal");
