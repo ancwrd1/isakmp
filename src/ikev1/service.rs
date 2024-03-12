@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use itertools::iproduct;
 use rand::random;
 use tracing::{debug, trace};
 
@@ -40,40 +41,41 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
-        for auth in [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha] {
-            for key_len in [256, 128] {
-                let attributes = vec![
-                    DataAttribute::short(
-                        IkeAttributeType::EncryptionAlgorithm.into(),
-                        IkeEncryptionAlgorithm::AesCbc.into(),
-                    ),
-                    DataAttribute::short(IkeAttributeType::HashAlgorithm.into(), auth.into()),
-                    DataAttribute::short(
-                        IkeAttributeType::GroupDescription.into(),
-                        IkeGroupDescription::Oakley2.into(),
-                    ),
-                    DataAttribute::short(
-                        IkeAttributeType::AuthenticationMethod.into(),
-                        if self.session.client_certificate().is_some() {
-                            IkeAuthMethod::RsaSignature.into()
-                        } else {
-                            IkeAuthMethod::HybridInitRsa.into()
-                        },
-                    ),
-                    DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
-                    DataAttribute::long(
-                        IkeAttributeType::LifeDuration.into(),
-                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-                    ),
-                    DataAttribute::short(IkeAttributeType::KeyLength.into(), key_len),
-                ];
+        let proposals = iproduct!(
+            [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha],
+            [256, 128],
+            [IkeGroupDescription::Oakley14, IkeGroupDescription::Oakley2]
+        );
 
-                transforms.push(TransformPayload {
-                    transform_num: (transforms.len() + 1) as _,
-                    transform_id: TransformId::KeyIke,
-                    attributes,
-                });
-            }
+        for (auth, key_len, group) in proposals {
+            let attributes = vec![
+                DataAttribute::short(
+                    IkeAttributeType::EncryptionAlgorithm.into(),
+                    IkeEncryptionAlgorithm::AesCbc.into(),
+                ),
+                DataAttribute::short(IkeAttributeType::HashAlgorithm.into(), auth.into()),
+                DataAttribute::short(IkeAttributeType::GroupDescription.into(), group.into()),
+                DataAttribute::short(
+                    IkeAttributeType::AuthenticationMethod.into(),
+                    if self.session.client_certificate().is_some() {
+                        IkeAuthMethod::RsaSignature.into()
+                    } else {
+                        IkeAuthMethod::HybridInitRsa.into()
+                    },
+                ),
+                DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
+                DataAttribute::long(
+                    IkeAttributeType::LifeDuration.into(),
+                    Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                ),
+                DataAttribute::short(IkeAttributeType::KeyLength.into(), key_len),
+            ];
+
+            transforms.push(TransformPayload {
+                transform_num: (transforms.len() + 1) as _,
+                transform_id: TransformId::KeyIke,
+                attributes,
+            });
         }
 
         let proposal = Payload::Proposal(ProposalPayload {
@@ -126,32 +128,35 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     ) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
-        for auth in [
-            EspAuthAlgorithm::HmacSha256v2,
-            EspAuthAlgorithm::HmacSha256,
-            EspAuthAlgorithm::HmacSha160,
-            EspAuthAlgorithm::HmacSha96,
-        ] {
-            for key_len in [256, 128] {
-                let attributes = vec![
-                    DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
-                    DataAttribute::long(
-                        EspAttributeType::LifeDuration.into(),
-                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-                    ),
-                    DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
-                    DataAttribute::short(
-                        EspAttributeType::EncapsulationMode.into(),
-                        EspEncapMode::UdpTunnel.into(),
-                    ),
-                    DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
-                ];
-                transforms.push(TransformPayload {
-                    transform_num: (transforms.len() + 1) as _,
-                    transform_id: TransformId::EspAesCbc,
-                    attributes,
-                });
-            }
+        let proposals = iproduct!(
+            [
+                EspAuthAlgorithm::HmacSha256v2,
+                EspAuthAlgorithm::HmacSha256,
+                EspAuthAlgorithm::HmacSha160,
+                EspAuthAlgorithm::HmacSha96,
+            ],
+            [256, 128]
+        );
+
+        for (auth, key_len) in proposals {
+            let attributes = vec![
+                DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
+                DataAttribute::long(
+                    EspAttributeType::LifeDuration.into(),
+                    Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                ),
+                DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
+                DataAttribute::short(
+                    EspAttributeType::EncapsulationMode.into(),
+                    EspEncapMode::UdpTunnel.into(),
+                ),
+                DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
+            ];
+            transforms.push(TransformPayload {
+                transform_num: (transforms.len() + 1) as _,
+                transform_id: TransformId::EspAesCbc,
+                attributes,
+            });
         }
 
         let proposal = Payload::Proposal(ProposalPayload {
@@ -486,8 +491,21 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         debug!("Negotiated SA key length: {}", key_len);
 
+        let group: IkeGroupDescription = attributes
+            .iter()
+            .find_map(|a| {
+                if a.attribute_type == IkeAttributeType::GroupDescription.into() {
+                    a.as_short().map(Into::into)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow!("No oakley group in response!"))?;
+
+        debug!("Negotiated SA group: {:?}", group);
+
         self.session
-            .init_from_sa(response.cookie_r, sa_bytes, hash_alg, key_len)?;
+            .init_from_sa(response.cookie_r, sa_bytes, hash_alg, key_len, group)?;
 
         debug!("End SA proposal");
 

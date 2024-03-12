@@ -135,6 +135,7 @@ impl From<IkeEncryptionAlgorithm> for u16 {
 pub enum IkeGroupDescription {
     #[default]
     Oakley2,
+    Oakley14,
     Other(u16),
 }
 
@@ -142,6 +143,7 @@ impl From<u16> for IkeGroupDescription {
     fn from(value: u16) -> Self {
         match value {
             2 => Self::Oakley2,
+            14 => Self::Oakley14,
             other => Self::Other(other),
         }
     }
@@ -151,6 +153,7 @@ impl From<IkeGroupDescription> for u16 {
     fn from(value: IkeGroupDescription) -> Self {
         match value {
             IkeGroupDescription::Oakley2 => 2,
+            IkeGroupDescription::Oakley14 => 14,
             IkeGroupDescription::Other(u) => u,
         }
     }

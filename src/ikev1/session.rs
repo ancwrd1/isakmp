@@ -5,6 +5,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 
+use crate::model::IkeGroupDescription;
 use crate::{
     crypto::{ClientCertificate, Crypto},
     model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeHashAlgorithm},
@@ -27,8 +28,11 @@ impl Ikev1SyncedSession {
         sa_bytes: Bytes,
         hash_alg: IkeHashAlgorithm,
         key_len: usize,
+        group: IkeGroupDescription,
     ) -> anyhow::Result<()> {
-        self.0.write().init_from_sa(cookie_r, sa_bytes, hash_alg, key_len)
+        self.0
+            .write()
+            .init_from_sa(cookie_r, sa_bytes, hash_alg, key_len, group)
     }
 
     pub fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
@@ -209,13 +213,11 @@ impl IsakmpSession for Ikev1Session {
 impl Ikev1Session {
     fn new(identity: Identity) -> anyhow::Result<Self> {
         let crypto = Crypto::new(identity)?;
-        let public_key = crypto.public_key();
         let nonce: [u8; 32] = random();
         Ok(Self {
             crypto,
             initiator: Arc::new(EndpointData {
                 cookie: random(),
-                public_key,
                 nonce: Bytes::copy_from_slice(&nonce),
                 ..Default::default()
             }),
@@ -234,15 +236,22 @@ impl Ikev1Session {
         sa_bytes: Bytes,
         hash_alg: IkeHashAlgorithm,
         key_len: usize,
+        group: IkeGroupDescription,
     ) -> anyhow::Result<()> {
+        self.sa_bytes = sa_bytes;
+
+        self.crypto.init_cipher(key_len);
+        self.crypto.init_group(group.into())?;
+
         self.responder = Arc::new(EndpointData {
             cookie: cookie_r,
             ..(*self.responder).clone()
         });
 
-        self.sa_bytes = sa_bytes;
-
-        self.crypto.init_cipher(key_len);
+        self.initiator = Arc::new(EndpointData {
+            public_key: self.crypto.public_key(),
+            ..(*self.initiator).clone()
+        });
 
         match hash_alg {
             IkeHashAlgorithm::Sha => self.crypto.init_sha1(),
