@@ -1,14 +1,15 @@
+use std::path::Path;
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::anyhow;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
+use serde::{Deserialize, Serialize};
 
-use crate::model::IkeGroupDescription;
 use crate::{
     crypto::{ClientCertificate, Crypto},
-    model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeHashAlgorithm},
+    model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeGroupDescription, IkeHashAlgorithm},
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
 
@@ -20,6 +21,32 @@ pub struct Ikev1SyncedSession(Ikev1SessionRef);
 impl Ikev1SyncedSession {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
         Ok(Self(Arc::new(RwLock::new(Ikev1Session::new(identity)?))))
+    }
+
+    pub fn load<P>(&mut self, path: P) -> anyhow::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        let data = std::fs::read(path)?;
+        let stored_session = rmp_serde::from_slice::<Ikev1StoredSession>(&data)?;
+        self.0.write().initiator = Arc::new(stored_session.initiator);
+        self.0.write().responder = Arc::new(stored_session.responder);
+        self.0.write().session_keys = Arc::new(stored_session.session_keys);
+        Ok(())
+    }
+
+    pub fn store<P>(&self, path: P) -> anyhow::Result<usize>
+    where
+        P: AsRef<Path>,
+    {
+        let stored_session = Ikev1StoredSession {
+            initiator: (*self.initiator()).clone(),
+            responder: (*self.responder()).clone(),
+            session_keys: (*self.session_keys()).clone(),
+        };
+        let data = rmp_serde::to_vec(&stored_session)?;
+        std::fs::write(path, &data)?;
+        Ok(data.len())
     }
 
     pub fn init_from_sa(
@@ -110,6 +137,13 @@ impl IsakmpSession for Ikev1SyncedSession {
     fn session_keys(&self) -> Arc<SessionKeys> {
         self.0.read().session_keys()
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Ikev1StoredSession {
+    initiator: EndpointData,
+    responder: EndpointData,
+    session_keys: SessionKeys,
 }
 
 struct Ikev1Session {

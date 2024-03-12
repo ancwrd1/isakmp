@@ -1,10 +1,12 @@
-use crate::crypto::ClientCertificate;
-use bytes::Bytes;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+
+use crate::crypto::ClientCertificate;
 use crate::model::EspCryptMaterial;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SessionKeys {
     pub shared_secret: Bytes,
     pub skeyid: Bytes,
@@ -13,7 +15,7 @@ pub struct SessionKeys {
     pub skeyid_e: Bytes,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct EndpointData {
     pub cookie: u64,
     pub public_key: Bytes,
