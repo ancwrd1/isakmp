@@ -299,6 +299,7 @@ impl From<EspAuthAlgorithm> for u16 {
 pub enum EspEncapMode {
     #[default]
     UdpTunnel,
+    CheckpointEspInUdp,
     Other(u16),
 }
 
@@ -306,6 +307,7 @@ impl From<u16> for EspEncapMode {
     fn from(value: u16) -> Self {
         match value {
             3 => Self::UdpTunnel,
+            0xf003 => Self::CheckpointEspInUdp,
             other => Self::Other(other),
         }
     }
@@ -315,6 +317,7 @@ impl From<EspEncapMode> for u16 {
     fn from(value: EspEncapMode) -> Self {
         match value {
             EspEncapMode::UdpTunnel => 3,
+            EspEncapMode::CheckpointEspInUdp => 0xf003,
             EspEncapMode::Other(u) => u,
         }
     }
