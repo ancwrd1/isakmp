@@ -230,11 +230,6 @@ impl Ikev1Session {
         })
     }
 
-    pub fn reset(&mut self, identity: Identity) -> anyhow::Result<()> {
-        let _ = std::mem::replace(self, Self::new(identity)?);
-        Ok(())
-    }
-
     pub fn init_from_sa(
         &mut self,
         cookie_r: u64,
