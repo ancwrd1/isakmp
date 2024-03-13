@@ -49,6 +49,10 @@ impl Ikev1SyncedSession {
         Ok(data.len())
     }
 
+    pub fn reset(&mut self, identity: Identity) -> anyhow::Result<()> {
+        self.0.write().reset(identity)
+    }
+
     pub fn init_from_sa(
         &mut self,
         cookie_r: u64,
@@ -262,6 +266,11 @@ impl Ikev1Session {
             esp_in: Default::default(),
             esp_out: Default::default(),
         })
+    }
+
+    pub fn reset(&mut self, identity: Identity) -> anyhow::Result<()> {
+        let _ = std::mem::replace(self, Self::new(identity)?);
+        Ok(())
     }
 
     pub fn init_from_sa(
