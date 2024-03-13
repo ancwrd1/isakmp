@@ -148,7 +148,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
                 DataAttribute::short(
                     EspAttributeType::EncapsulationMode.into(),
-                    EspEncapMode::CheckpointEspInUdp.into(),
+                    EspEncapMode::UdpTunnel.into(),
                 ),
                 DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
             ];
