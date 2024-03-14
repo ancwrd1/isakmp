@@ -135,10 +135,11 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 EspAuthAlgorithm::HmacSha160,
                 EspAuthAlgorithm::HmacSha96,
             ],
+            [EspEncapMode::UdpTunnel, EspEncapMode::CheckpointEspInUdp],
             [256, 192, 128]
         );
 
-        for (auth, key_len) in proposals {
+        for (auth, encap, key_len) in proposals {
             let attributes = vec![
                 DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
                 DataAttribute::long(
@@ -146,10 +147,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
                 ),
                 DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
-                DataAttribute::short(
-                    EspAttributeType::EncapsulationMode.into(),
-                    EspEncapMode::UdpTunnel.into(),
-                ),
+                DataAttribute::short(EspAttributeType::EncapsulationMode.into(), encap.into()),
                 DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
             ];
             transforms.push(TransformPayload {
