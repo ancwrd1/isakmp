@@ -132,6 +132,8 @@ impl Crypto {
     pub fn init_cipher(&mut self, key_len: usize) {
         if key_len == 16 {
             self.cipher = Cipher::aes_128_cbc()
+        } else if key_len == 24 {
+            self.cipher = Cipher::aes_192_cbc()
         } else if key_len == 32 {
             self.cipher = Cipher::aes_256_cbc()
         }

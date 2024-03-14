@@ -43,7 +43,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let proposals = iproduct!(
             [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha],
-            [256, 128],
+            [256, 192, 128],
             [IkeGroupDescription::Oakley14, IkeGroupDescription::Oakley2]
         );
 
@@ -135,7 +135,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 EspAuthAlgorithm::HmacSha160,
                 EspAuthAlgorithm::HmacSha96,
             ],
-            [256, 128]
+            [256, 192, 128]
         );
 
         for (auth, key_len) in proposals {
@@ -167,7 +167,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         });
 
         let sa_payload = Payload::SecurityAssociation(SecurityAssociationPayload {
-            doi: 1,
+            doi: 0,
             situation: None,
             payloads: vec![proposal],
         });
@@ -500,7 +500,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No oakley group in response!"))?;
+            .ok_or_else(|| anyhow!("No DH group in response!"))?;
 
         debug!("Negotiated SA group: {:?}", group);
 
