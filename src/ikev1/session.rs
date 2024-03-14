@@ -393,7 +393,7 @@ impl Ikev1Session {
         self.responder = Arc::new(EndpointData {
             esp_spi: spi_r,
             esp_nonce: nonce_r,
-            ..(*self.initiator).clone()
+            ..(*self.responder).clone()
         });
 
         self.esp_in = Arc::new(self.gen_esp_material(self.initiator.esp_spi, auth_alg, key_len)?);
