@@ -20,7 +20,7 @@ tracing = "0.1"
 itertools = "0.12"
 
 [dev-dependencies]
-opener = "0.6"
+opener = "0.7"
 regex = "1"
 once_cell = "1"
 tokio = { version = "1", features = ["full"]}
