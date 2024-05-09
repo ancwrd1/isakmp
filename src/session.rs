@@ -43,7 +43,7 @@ pub trait IsakmpSession {
         T: AsRef<[u8]>;
     fn esp_in(&self) -> Arc<EspCryptMaterial>;
     fn esp_out(&self) -> Arc<EspCryptMaterial>;
-    fn client_certificate(&self) -> Option<Arc<ClientCertificate>>;
+    fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>>;
     fn initiator(&self) -> Arc<EndpointData>;
     fn responder(&self) -> Arc<EndpointData>;
     fn session_keys(&self) -> Arc<SessionKeys>;

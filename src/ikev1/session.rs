@@ -95,7 +95,7 @@ impl IsakmpSession for Ikev1SyncedSession {
         self.0.read().esp_out()
     }
 
-    fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+    fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
         self.0.read().client_certificate()
     }
 
@@ -193,7 +193,7 @@ impl IsakmpSession for Ikev1Session {
         self.esp_out.clone()
     }
 
-    fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+    fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
         self.crypto.client_certificate()
     }
 

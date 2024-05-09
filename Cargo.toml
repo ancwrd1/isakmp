@@ -18,6 +18,7 @@ async-trait = "0.1"
 parking_lot = "0.12"
 tracing = "0.1"
 itertools = "0.12"
+cryptoki = "0.6"
 
 [dev-dependencies]
 opener = "0.7"

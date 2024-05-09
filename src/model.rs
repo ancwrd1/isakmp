@@ -894,6 +894,10 @@ pub enum Identity {
         path: PathBuf,
         password: Option<String>,
     },
+    Pkcs11 {
+        driver_path: PathBuf,
+        pin: String,
+    },
     #[default]
     None,
 }

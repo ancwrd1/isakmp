@@ -1,18 +1,27 @@
-use std::path::Path;
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::anyhow;
 use bytes::Bytes;
-use openssl::pkcs12::Pkcs12;
-use openssl::rsa::Padding;
-use openssl::x509::X509;
+use cryptoki::{
+    context::{CInitializeArgs, Pkcs11},
+    mechanism::Mechanism,
+    object::{Attribute, AttributeType, CertificateType, KeyType, ObjectHandle},
+    session::{Session, UserType},
+    types::AuthPin,
+};
 use openssl::{
     bn::BigNum,
     dh::Dh,
     hash::{Hasher, MessageDigest},
+    pkcs12::Pkcs12,
     pkey::{PKey, Private},
+    rsa::Padding,
     sign::Signer,
     symm::{Cipher, Crypter, Mode},
+    x509::X509,
 };
 
 use crate::model::Identity;
@@ -41,12 +50,22 @@ const G14_P: &[u8] = &[
     255, 255, 255,
 ];
 
-pub struct ClientCertificate {
+pub trait ClientCertificate {
+    fn issuer(&self) -> Bytes;
+
+    fn subject(&self) -> Bytes;
+
+    fn certs(&self) -> Vec<Bytes>;
+
+    fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes>;
+}
+
+pub struct Pkcs8Certificate {
     pkey: PKey<Private>,
     certs: Vec<X509>,
 }
 
-impl ClientCertificate {
+impl Pkcs8Certificate {
     fn load(path: &Path, password: Option<&str>) -> anyhow::Result<Self> {
         let data = std::fs::read(path)?;
         if let Ok(pkcs12) = Pkcs12::from_der(&data) {
@@ -56,12 +75,12 @@ impl ClientCertificate {
                 if let Some(ca) = parsed.ca {
                     certs.extend(ca);
                 }
-                Ok(ClientCertificate { pkey, certs })
+                Ok(Self { pkey, certs })
             } else {
                 Err(anyhow!("No certificate chain found in the PKCS12!"))
             }
         } else if let (Ok(pkey), Ok(stack)) = (PKey::private_key_from_pem(&data), X509::stack_from_pem(&data)) {
-            Ok(ClientCertificate {
+            Ok(Self {
                 pkey,
                 certs: stack.into_iter().map(Into::into).collect(),
             })
@@ -69,8 +88,10 @@ impl ClientCertificate {
             Err(anyhow!("Unknown certificate file format!"))
         }
     }
+}
 
-    pub fn issuer(&self) -> Bytes {
+impl ClientCertificate for Pkcs8Certificate {
+    fn issuer(&self) -> Bytes {
         self.certs
             .first()
             .and_then(|c| c.issuer_name().to_der().ok())
@@ -78,7 +99,7 @@ impl ClientCertificate {
             .into()
     }
 
-    pub fn subject(&self) -> Bytes {
+    fn subject(&self) -> Bytes {
         self.certs
             .first()
             .and_then(|c| c.subject_name().to_der().ok())
@@ -86,11 +107,11 @@ impl ClientCertificate {
             .into()
     }
 
-    pub fn certs(&self) -> Vec<Bytes> {
+    fn certs(&self) -> Vec<Bytes> {
         self.certs.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
     }
 
-    pub fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+    fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let mut buf = vec![0u8; self.pkey.size()];
         let size = self.pkey.rsa()?.private_encrypt(data, &mut buf, Padding::PKCS1)?;
 
@@ -98,19 +119,104 @@ impl ClientCertificate {
     }
 }
 
+struct Pkcs11Certificate {
+    session: Session,
+    key: ObjectHandle,
+    certs: Vec<X509>,
+}
+unsafe impl Sync for Pkcs11Certificate {}
+
+impl Pkcs11Certificate {
+    fn init(driver_path: PathBuf, pin: String) -> anyhow::Result<Self> {
+        let pkcs11 = Pkcs11::new(driver_path)?;
+        pkcs11.initialize(CInitializeArgs::OsThreads)?;
+
+        let slot = pkcs11
+            .get_slots_with_token()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No slots found"))?;
+
+        let user_pin = AuthPin::new(pin.clone());
+
+        let session = pkcs11.open_ro_session(slot)?;
+        session.login(UserType::User, Some(&user_pin))?;
+        session.login(UserType::ContextSpecific, Some(&user_pin))?;
+
+        let priv_key_template = [
+            Attribute::Token(true),
+            Attribute::Private(true),
+            Attribute::Sign(true),
+            Attribute::KeyType(KeyType::RSA),
+        ];
+
+        let key = session
+            .find_objects(&priv_key_template)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No private key!"))?;
+
+        let cert_template = [
+            Attribute::Token(true),
+            Attribute::Private(false),
+            Attribute::CertificateType(CertificateType::X_509),
+        ];
+
+        let mut certs = Vec::new();
+
+        for obj in session.find_objects(&cert_template)? {
+            if let Some(attr) = session.get_attributes(obj, &[AttributeType::Value])?.into_iter().next() {
+                if let Attribute::Value(value) = attr {
+                    certs.push(X509::from_der(&value)?);
+                }
+            }
+        }
+
+        Ok(Self { session, key, certs })
+    }
+}
+
+impl ClientCertificate for Pkcs11Certificate {
+    fn issuer(&self) -> Bytes {
+        self.certs
+            .first()
+            .and_then(|c| c.issuer_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    fn subject(&self) -> Bytes {
+        self.certs
+            .first()
+            .and_then(|c| c.subject_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    fn certs(&self) -> Vec<Bytes> {
+        self.certs.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
+    }
+
+    fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        Ok(self.session.sign(&Mechanism::RsaPkcs, self.key, data)?.into())
+    }
+}
+
 pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
     cipher: Cipher,
-    client_cert: Option<Arc<ClientCertificate>>,
+    client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
 }
 
 impl Crypto {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
-        let client_cert = if let Identity::Certificate { path, password } = identity {
-            Some(Arc::new(ClientCertificate::load(&path, password.as_deref())?))
-        } else {
-            None
+        let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
+            Identity::Certificate { path, password } => {
+                Some(Arc::new(Pkcs8Certificate::load(&path, password.as_deref())?))
+            }
+            Identity::Pkcs11 { driver_path, pin } => Some(Arc::new(Pkcs11Certificate::init(driver_path, pin)?)),
+            Identity::None => None,
         };
 
         Ok(Self {
@@ -225,7 +331,7 @@ impl Crypto {
         self.digest.size()
     }
 
-    pub fn client_certificate(&self) -> Option<Arc<ClientCertificate>> {
+    pub fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
         self.client_cert.clone()
     }
 }
