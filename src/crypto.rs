@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::anyhow;
 use bytes::Bytes;
+use cryptoki::error::RvError;
 use cryptoki::session::Session;
 use cryptoki::{
     context::{CInitializeArgs, Pkcs11},
@@ -206,10 +207,6 @@ impl ClientCertificate for Pkcs11Certificate {
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let session = Self::init_session(&self.driver_path, &self.pin)?;
 
-        debug!("Performing context-specific login");
-        let user_pin = AuthPin::new(self.pin.to_owned());
-        session.login(UserType::ContextSpecific, Some(&user_pin))?;
-
         let priv_key_template = [
             Attribute::Token(true),
             Attribute::Private(true),
@@ -226,7 +223,18 @@ impl ClientCertificate for Pkcs11Certificate {
             .ok_or_else(|| anyhow!("No private key!"))?;
 
         debug!("Signing data");
-        Ok(session.sign(&Mechanism::RsaPkcs, key, data)?.into())
+
+        match session.sign(&Mechanism::RsaPkcs, key, data) {
+            Ok(data) => Ok(data.into()),
+            Err(cryptoki::error::Error::Pkcs11(RvError::UserNotLoggedIn)) => {
+                debug!("Trying with context-specific login");
+                let user_pin = AuthPin::new(self.pin.to_owned());
+                session.login(UserType::User, Some(&user_pin))?;
+                session.login(UserType::ContextSpecific, Some(&user_pin))?;
+                Ok(session.sign(&Mechanism::RsaPkcs, key, data)?.into())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
