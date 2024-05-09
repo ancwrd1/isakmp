@@ -163,16 +163,30 @@ async fn handle_auth_reply(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let address = std::env::args()
-        .nth(1)
-        .ok_or_else(|| anyhow!("Missing required server address"))?;
+    let args = std::env::args().collect::<Vec<_>>();
 
-    let identity = match std::env::args().nth(2) {
-        Some(arg) => Identity::Certificate {
-            path: arg.into(),
-            password: Some("changeit".to_owned()),
+    let address = args.get(1).ok_or_else(|| anyhow!("Missing required server address"))?;
+
+    let identity = match args.get(2).map(|s| s.as_str()) {
+        Some("pkcs12") => match args.get(3) {
+            Some(arg) => Identity::Pkcs12 {
+                path: arg.into(),
+                password: args.get(4).map(|s| s.as_str()).unwrap_or_default().to_owned(),
+            },
+            None => return Err(anyhow!("Missing pkcs12 file path")),
         },
-        None => Identity::None,
+        Some("pkcs8") => match args.get(3) {
+            Some(arg) => Identity::Pkcs8 { path: arg.into() },
+            None => return Err(anyhow!("Missing pkcs8 pem file path")),
+        },
+        Some("pkcs11") => match args.get(3) {
+            Some(arg) => Identity::Pkcs11 {
+                driver_path: arg.into(),
+                pin: args.get(4).map(|s| s.as_str()).unwrap_or_default().to_owned(),
+            },
+            None => return Err(anyhow!("Missing pkcs8 pem file path")),
+        },
+        _ => Identity::None,
     };
 
     tracing_subscriber::fmt()

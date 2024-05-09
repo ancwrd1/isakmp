@@ -890,16 +890,19 @@ impl From<AttributesPayloadType> for u8 {
 
 #[derive(Debug, Clone, Default)]
 pub enum Identity {
-    Certificate {
+    #[default]
+    None,
+    Pkcs12 {
         path: PathBuf,
-        password: Option<String>,
+        password: String,
+    },
+    Pkcs8 {
+        path: PathBuf,
     },
     Pkcs11 {
         driver_path: PathBuf,
         pin: String,
     },
-    #[default]
-    None,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]

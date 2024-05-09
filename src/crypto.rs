@@ -5,11 +5,12 @@ use std::{
 
 use anyhow::anyhow;
 use bytes::Bytes;
+use cryptoki::session::Session;
 use cryptoki::{
     context::{CInitializeArgs, Pkcs11},
     mechanism::Mechanism,
-    object::{Attribute, AttributeType, CertificateType, KeyType, ObjectHandle},
-    session::{Session, UserType},
+    object::{Attribute, AttributeType, CertificateType, KeyType},
+    session::UserType,
     types::AuthPin,
 };
 use openssl::{
@@ -23,6 +24,7 @@ use openssl::{
     symm::{Cipher, Crypter, Mode},
     x509::X509,
 };
+use tracing::debug;
 
 use crate::model::Identity;
 
@@ -66,27 +68,30 @@ pub struct Pkcs8Certificate {
 }
 
 impl Pkcs8Certificate {
-    fn load(path: &Path, password: Option<&str>) -> anyhow::Result<Self> {
+    fn from_pkcs12(path: &Path, password: &str) -> anyhow::Result<Self> {
         let data = std::fs::read(path)?;
-        if let Ok(pkcs12) = Pkcs12::from_der(&data) {
-            let parsed = pkcs12.parse2(password.ok_or_else(|| anyhow!("No password provided for PKCS12!"))?)?;
-            if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
-                let mut certs = vec![cert];
-                if let Some(ca) = parsed.ca {
-                    certs.extend(ca);
-                }
-                Ok(Self { pkey, certs })
-            } else {
-                Err(anyhow!("No certificate chain found in the PKCS12!"))
+        let pkcs12 = Pkcs12::from_der(&data)?;
+        let parsed = pkcs12.parse2(password)?;
+        if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
+            let mut certs = vec![cert];
+            if let Some(ca) = parsed.ca {
+                certs.extend(ca);
             }
-        } else if let (Ok(pkey), Ok(stack)) = (PKey::private_key_from_pem(&data), X509::stack_from_pem(&data)) {
-            Ok(Self {
-                pkey,
-                certs: stack.into_iter().map(Into::into).collect(),
-            })
+            Ok(Self { pkey, certs })
         } else {
-            Err(anyhow!("Unknown certificate file format!"))
+            Err(anyhow!("No certificate chain found in the PKCS12!"))
         }
+    }
+
+    fn from_pkcs8(path: &Path) -> anyhow::Result<Self> {
+        let data = std::fs::read(path)?;
+        let pkey = PKey::private_key_from_pem(&data)?;
+        let stack = X509::stack_from_pem(&data)?;
+
+        Ok(Self {
+            pkey,
+            certs: stack.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -120,41 +125,36 @@ impl ClientCertificate for Pkcs8Certificate {
 }
 
 struct Pkcs11Certificate {
-    session: Session,
-    key: ObjectHandle,
+    driver_path: PathBuf,
+    pin: String,
     certs: Vec<X509>,
 }
 unsafe impl Sync for Pkcs11Certificate {}
 
 impl Pkcs11Certificate {
-    fn init(driver_path: PathBuf, pin: String) -> anyhow::Result<Self> {
-        let pkcs11 = Pkcs11::new(driver_path)?;
+    fn init_session(driver_path: &Path, pin: &str) -> anyhow::Result<Session> {
+        debug!("Initializing PKCS11");
+        let pkcs11 = Pkcs11::new(&driver_path)?;
         pkcs11.initialize(CInitializeArgs::OsThreads)?;
 
-        let slot = pkcs11
-            .get_slots_with_token()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("No slots found"))?;
+        let slots = pkcs11.get_slots_with_token()?;
 
-        let user_pin = AuthPin::new(pin.clone());
+        debug!("Total slots: {}", slots.len());
+        let slot = slots.into_iter().next().ok_or_else(|| anyhow!("No slots found"))?;
 
+        let user_pin = AuthPin::new(pin.to_owned());
+
+        debug!("Opening r/o session");
         let session = pkcs11.open_ro_session(slot)?;
+
+        debug!("Authenticating user with a pin");
         session.login(UserType::User, Some(&user_pin))?;
-        session.login(UserType::ContextSpecific, Some(&user_pin))?;
 
-        let priv_key_template = [
-            Attribute::Token(true),
-            Attribute::Private(true),
-            Attribute::Sign(true),
-            Attribute::KeyType(KeyType::RSA),
-        ];
+        Ok(session)
+    }
 
-        let key = session
-            .find_objects(&priv_key_template)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("No private key!"))?;
+    fn init(driver_path: PathBuf, pin: String) -> anyhow::Result<Self> {
+        let session = Self::init_session(&driver_path, &pin)?;
 
         let cert_template = [
             Attribute::Token(true),
@@ -164,15 +164,21 @@ impl Pkcs11Certificate {
 
         let mut certs = Vec::new();
 
+        debug!("Reading certificates");
+
         for obj in session.find_objects(&cert_template)? {
-            if let Some(attr) = session.get_attributes(obj, &[AttributeType::Value])?.into_iter().next() {
-                if let Attribute::Value(value) = attr {
-                    certs.push(X509::from_der(&value)?);
-                }
+            if let Some(Attribute::Value(value)) =
+                session.get_attributes(obj, &[AttributeType::Value])?.into_iter().next()
+            {
+                certs.push(X509::from_der(&value)?);
             }
         }
 
-        Ok(Self { session, key, certs })
+        Ok(Self {
+            driver_path,
+            pin,
+            certs,
+        })
     }
 }
 
@@ -198,7 +204,29 @@ impl ClientCertificate for Pkcs11Certificate {
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        Ok(self.session.sign(&Mechanism::RsaPkcs, self.key, data)?.into())
+        let session = Self::init_session(&self.driver_path, &self.pin)?;
+
+        debug!("Performing context-specific login");
+        let user_pin = AuthPin::new(self.pin.to_owned());
+        session.login(UserType::ContextSpecific, Some(&user_pin))?;
+
+        let priv_key_template = [
+            Attribute::Token(true),
+            Attribute::Private(true),
+            Attribute::Sign(true),
+            Attribute::KeyType(KeyType::RSA),
+        ];
+
+        debug!("Looking up for private key");
+
+        let key = session
+            .find_objects(&priv_key_template)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No private key!"))?;
+
+        debug!("Signing data");
+        Ok(session.sign(&Mechanism::RsaPkcs, key, data)?.into())
     }
 }
 
@@ -212,9 +240,8 @@ pub struct Crypto {
 impl Crypto {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
         let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
-            Identity::Certificate { path, password } => {
-                Some(Arc::new(Pkcs8Certificate::load(&path, password.as_deref())?))
-            }
+            Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
+            Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
             Identity::Pkcs11 { driver_path, pin } => Some(Arc::new(Pkcs11Certificate::init(driver_path, pin)?)),
             Identity::None => None,
         };
