@@ -183,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
             Some(arg) => Identity::Pkcs11 {
                 driver_path: arg.into(),
                 pin: args.get(4).map(|s| s.as_str()).unwrap_or_default().to_owned(),
+                key_id: args.get(5).map(|s| hex::decode(s).unwrap().into()),
             },
             None => return Err(anyhow!("Missing pkcs8 pem file path")),
         },

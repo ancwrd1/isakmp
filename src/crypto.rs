@@ -126,6 +126,7 @@ impl ClientCertificate for Pkcs8Certificate {
 struct Pkcs11Certificate {
     driver_path: PathBuf,
     pin: String,
+    key_id: Option<Bytes>,
     certs: Vec<X509>,
 }
 unsafe impl Sync for Pkcs11Certificate {}
@@ -152,14 +153,18 @@ impl Pkcs11Certificate {
         Ok(session)
     }
 
-    fn init(driver_path: PathBuf, pin: String) -> anyhow::Result<Self> {
+    fn init(driver_path: PathBuf, pin: String, key_id: Option<Bytes>) -> anyhow::Result<Self> {
         let session = Self::init_session(&driver_path, &pin)?;
 
-        let cert_template = [
+        let mut cert_template = vec![
             Attribute::Token(true),
             Attribute::Private(false),
             Attribute::CertificateType(CertificateType::X_509),
         ];
+
+        if let Some(ref key_id) = key_id {
+            cert_template.push(Attribute::Id(key_id.to_vec()));
+        }
 
         let mut certs = Vec::new();
 
@@ -176,6 +181,7 @@ impl Pkcs11Certificate {
         Ok(Self {
             driver_path,
             pin,
+            key_id,
             certs,
         })
     }
@@ -205,12 +211,16 @@ impl ClientCertificate for Pkcs11Certificate {
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let session = Self::init_session(&self.driver_path, &self.pin)?;
 
-        let priv_key_template = [
+        let mut priv_key_template = vec![
             Attribute::Token(true),
             Attribute::Private(true),
             Attribute::Sign(true),
             Attribute::KeyType(KeyType::RSA),
         ];
+
+        if let Some(ref key_id) = self.key_id {
+            priv_key_template.push(Attribute::Id(key_id.to_vec()));
+        }
 
         debug!("Looking up for private key");
 
@@ -251,7 +261,11 @@ impl Crypto {
         let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
             Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
             Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
-            Identity::Pkcs11 { driver_path, pin } => Some(Arc::new(Pkcs11Certificate::init(driver_path, pin)?)),
+            Identity::Pkcs11 {
+                driver_path,
+                pin,
+                key_id,
+            } => Some(Arc::new(Pkcs11Certificate::init(driver_path, pin, key_id)?)),
             Identity::None => None,
         };
 

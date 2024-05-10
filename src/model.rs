@@ -902,6 +902,7 @@ pub enum Identity {
     Pkcs11 {
         driver_path: PathBuf,
         pin: String,
+        key_id: Option<Bytes>,
     },
 }
 
