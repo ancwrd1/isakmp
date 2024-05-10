@@ -1,4 +1,4 @@
-use crate::crypto::ClientCertificate;
+use crate::certs::ClientCertificate;
 use bytes::Bytes;
 use std::sync::Arc;
 

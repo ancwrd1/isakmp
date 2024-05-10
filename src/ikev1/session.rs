@@ -7,10 +7,11 @@ use rand::random;
 
 use crate::model::IkeGroupDescription;
 use crate::{
-    crypto::{ClientCertificate, Crypto},
+    crypto::Crypto,
     model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeHashAlgorithm},
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
+use crate::certs::ClientCertificate;
 
 type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
 
