@@ -61,7 +61,34 @@ pub trait ClientCertificate {
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes>;
 }
 
-pub struct Pkcs8Certificate {
+trait CertOps {
+    fn get_issuer(&self) -> Bytes {
+        self.x509_certs()
+            .first()
+            .and_then(|c| c.issuer_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    fn get_subject(&self) -> Bytes {
+        self.x509_certs()
+            .first()
+            .and_then(|c| c.subject_name().to_der().ok())
+            .unwrap_or_default()
+            .into()
+    }
+
+    fn get_certs(&self) -> Vec<Bytes> {
+        self.x509_certs()
+            .iter()
+            .flat_map(|c| c.to_der().map(|c| c.into()))
+            .collect()
+    }
+
+    fn x509_certs(&self) -> &[X509];
+}
+
+struct Pkcs8Certificate {
     pkey: PKey<Private>,
     certs: Vec<X509>,
 }
@@ -94,25 +121,23 @@ impl Pkcs8Certificate {
     }
 }
 
+impl CertOps for Pkcs8Certificate {
+    fn x509_certs(&self) -> &[X509] {
+        &self.certs
+    }
+}
+
 impl ClientCertificate for Pkcs8Certificate {
     fn issuer(&self) -> Bytes {
-        self.certs
-            .first()
-            .and_then(|c| c.issuer_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.get_issuer()
     }
 
     fn subject(&self) -> Bytes {
-        self.certs
-            .first()
-            .and_then(|c| c.subject_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.get_subject()
     }
 
     fn certs(&self) -> Vec<Bytes> {
-        self.certs.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
+        self.get_certs()
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
@@ -129,12 +154,11 @@ struct Pkcs11Certificate {
     key_id: Option<Bytes>,
     certs: Vec<X509>,
 }
-unsafe impl Sync for Pkcs11Certificate {}
 
 impl Pkcs11Certificate {
     fn init_session(driver_path: &Path, pin: &str) -> anyhow::Result<Session> {
         debug!("Initializing PKCS11");
-        let pkcs11 = Pkcs11::new(&driver_path)?;
+        let pkcs11 = Pkcs11::new(driver_path)?;
         pkcs11.initialize(CInitializeArgs::OsThreads)?;
 
         let slots = pkcs11.get_slots_with_token()?;
@@ -187,25 +211,23 @@ impl Pkcs11Certificate {
     }
 }
 
+impl CertOps for Pkcs11Certificate {
+    fn x509_certs(&self) -> &[X509] {
+        &self.certs
+    }
+}
+
 impl ClientCertificate for Pkcs11Certificate {
     fn issuer(&self) -> Bytes {
-        self.certs
-            .first()
-            .and_then(|c| c.issuer_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.get_issuer()
     }
 
     fn subject(&self) -> Bytes {
-        self.certs
-            .first()
-            .and_then(|c| c.subject_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.get_subject()
     }
 
     fn certs(&self) -> Vec<Bytes> {
-        self.certs.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
+        self.get_certs()
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
@@ -239,11 +261,12 @@ impl ClientCertificate for Pkcs11Certificate {
         );
 
         if always_auth {
+            debug!("Authenticating for additional context");
             let user_pin = AuthPin::new(self.pin.to_owned());
             session.login(UserType::ContextSpecific, Some(&user_pin))?;
         }
 
-        debug!("Signing data");
+        debug!("Signing data with HW token key and RSA PKCS1");
 
         Ok(session.sign(&Mechanism::RsaPkcs, key, data)?.into())
     }
