@@ -27,36 +27,33 @@ pub trait ClientCertificate {
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes>;
 }
 
-trait CertOps {
-    fn get_issuer(&self) -> Bytes {
-        self.x509_certs()
+struct CertList(Vec<X509>);
+
+impl CertList {
+    fn issuer(&self) -> Bytes {
+        self.0
             .first()
             .and_then(|c| c.issuer_name().to_der().ok())
             .unwrap_or_default()
             .into()
     }
 
-    fn get_subject(&self) -> Bytes {
-        self.x509_certs()
+    fn subject(&self) -> Bytes {
+        self.0
             .first()
             .and_then(|c| c.subject_name().to_der().ok())
             .unwrap_or_default()
             .into()
     }
 
-    fn get_certs(&self) -> Vec<Bytes> {
-        self.x509_certs()
-            .iter()
-            .flat_map(|c| c.to_der().map(|c| c.into()))
-            .collect()
+    fn certs(&self) -> Vec<Bytes> {
+        self.0.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
     }
-
-    fn x509_certs(&self) -> &[X509];
 }
 
 pub(crate) struct Pkcs8Certificate {
     pkey: PKey<Private>,
-    certs: Vec<X509>,
+    certs: CertList,
 }
 
 impl Pkcs8Certificate {
@@ -69,7 +66,10 @@ impl Pkcs8Certificate {
             if let Some(ca) = parsed.ca {
                 certs.extend(ca);
             }
-            Ok(Self { pkey, certs })
+            Ok(Self {
+                pkey,
+                certs: CertList(certs),
+            })
         } else {
             Err(anyhow!("No certificate chain found in the PKCS12!"))
         }
@@ -82,28 +82,22 @@ impl Pkcs8Certificate {
 
         Ok(Self {
             pkey,
-            certs: stack.into_iter().map(Into::into).collect(),
+            certs: CertList(stack.into_iter().map(Into::into).collect()),
         })
-    }
-}
-
-impl CertOps for Pkcs8Certificate {
-    fn x509_certs(&self) -> &[X509] {
-        &self.certs
     }
 }
 
 impl ClientCertificate for Pkcs8Certificate {
     fn issuer(&self) -> Bytes {
-        self.get_issuer()
+        self.certs.issuer()
     }
 
     fn subject(&self) -> Bytes {
-        self.get_subject()
+        self.certs.subject()
     }
 
     fn certs(&self) -> Vec<Bytes> {
-        self.get_certs()
+        self.certs.certs()
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
@@ -118,7 +112,7 @@ pub(crate) struct Pkcs11Certificate {
     driver_path: PathBuf,
     pin: String,
     key_id: Option<Bytes>,
-    certs: Vec<X509>,
+    certs: CertList,
 }
 
 impl Pkcs11Certificate {
@@ -172,28 +166,22 @@ impl Pkcs11Certificate {
             driver_path,
             pin,
             key_id,
-            certs,
+            certs: CertList(certs),
         })
-    }
-}
-
-impl CertOps for Pkcs11Certificate {
-    fn x509_certs(&self) -> &[X509] {
-        &self.certs
     }
 }
 
 impl ClientCertificate for Pkcs11Certificate {
     fn issuer(&self) -> Bytes {
-        self.get_issuer()
+        self.certs.issuer()
     }
 
     fn subject(&self) -> Bytes {
-        self.get_subject()
+        self.certs.subject()
     }
 
     fn certs(&self) -> Vec<Bytes> {
-        self.get_certs()
+        self.certs.certs()
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
