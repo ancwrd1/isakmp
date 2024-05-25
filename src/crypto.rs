@@ -40,6 +40,71 @@ const G14_P: &[u8] = &[
     255, 255, 255,
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DigestType {
+    Sha1,
+    Sha256,
+}
+
+impl From<DigestType> for MessageDigest {
+    fn from(value: DigestType) -> Self {
+        match value {
+            DigestType::Sha1 => MessageDigest::sha1(),
+            DigestType::Sha256 => MessageDigest::sha256(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CipherType {
+    Aes128Cbc,
+    Aes192Cbc,
+    Aes256Cbc,
+}
+
+impl TryFrom<usize> for CipherType {
+    type Error = anyhow::Error;
+
+    fn try_from(key_len: usize) -> Result<Self, Self::Error> {
+        match key_len {
+            16 => Ok(Self::Aes128Cbc),
+            24 => Ok(Self::Aes192Cbc),
+            32 => Ok(Self::Aes256Cbc),
+            _ => Err(anyhow!("Unsupported key len: {}", key_len)),
+        }
+    }
+}
+
+impl From<CipherType> for Cipher {
+    fn from(value: CipherType) -> Self {
+        match value {
+            CipherType::Aes128Cbc => Cipher::aes_128_cbc(),
+            CipherType::Aes192Cbc => Cipher::aes_192_cbc(),
+            CipherType::Aes256Cbc => Cipher::aes_256_cbc(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GroupType {
+    Oakley2,
+    Oakley14,
+}
+
+impl TryFrom<GroupType> for Dh<Private> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: GroupType) -> Result<Self, Self::Error> {
+        let g = match value {
+            GroupType::Oakley2 => G2_P,
+            GroupType::Oakley14 => G14_P,
+        };
+        let p = BigNum::from_slice(g)?;
+        let dh2 = Dh::from_pqg(p, None, BigNum::from_u32(2)?)?.generate_key()?;
+        Ok(dh2)
+    }
+}
+
 pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
@@ -48,7 +113,21 @@ pub struct Crypto {
 }
 
 impl Crypto {
-    pub fn new(identity: Identity) -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
+        Self::with_parameters(
+            Identity::None,
+            DigestType::Sha256,
+            CipherType::Aes256Cbc,
+            GroupType::Oakley2,
+        )
+    }
+
+    pub fn with_parameters(
+        identity: Identity,
+        digest: DigestType,
+        cipher: CipherType,
+        group: GroupType,
+    ) -> anyhow::Result<Self> {
         let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
             Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
             Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
@@ -61,45 +140,11 @@ impl Crypto {
         };
 
         Ok(Self {
-            dh2: Self::make_dh2(2)?,
-            digest: MessageDigest::sha256(),
-            cipher: Cipher::aes_256_cbc(),
+            dh2: group.try_into()?,
+            digest: digest.into(),
+            cipher: cipher.into(),
             client_cert,
         })
-    }
-
-    pub fn init_sha1(&mut self) {
-        self.digest = MessageDigest::sha1();
-    }
-
-    pub fn init_sha256(&mut self) {
-        self.digest = MessageDigest::sha256();
-    }
-
-    pub fn init_cipher(&mut self, key_len: usize) {
-        if key_len == 16 {
-            self.cipher = Cipher::aes_128_cbc()
-        } else if key_len == 24 {
-            self.cipher = Cipher::aes_192_cbc()
-        } else if key_len == 32 {
-            self.cipher = Cipher::aes_256_cbc()
-        }
-    }
-
-    fn make_dh2(group: u16) -> anyhow::Result<Dh<Private>> {
-        let g = match group {
-            2 => G2_P,
-            14 => G14_P,
-            _ => return Err(anyhow!("Unsupported group")),
-        };
-        let p = BigNum::from_slice(g)?;
-        let dh2 = Dh::from_pqg(p, None, BigNum::from_u32(2)?)?.generate_key()?;
-        Ok(dh2)
-    }
-
-    pub fn init_group(&mut self, group: u16) -> anyhow::Result<()> {
-        self.dh2 = Self::make_dh2(group)?;
-        Ok(())
     }
 
     pub fn public_key(&self) -> Bytes {

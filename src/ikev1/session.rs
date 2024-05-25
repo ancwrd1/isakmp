@@ -5,13 +5,12 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 
-use crate::model::IkeGroupDescription;
 use crate::{
-    crypto::Crypto,
-    model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeHashAlgorithm},
+    certs::ClientCertificate,
+    crypto::{Crypto, DigestType, GroupType},
+    model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeGroupDescription, IkeHashAlgorithm},
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
-use crate::certs::ClientCertificate;
 
 type Ikev1SessionRef = Arc<RwLock<Ikev1Session>>;
 
@@ -114,6 +113,7 @@ impl IsakmpSession for Ikev1SyncedSession {
 }
 
 struct Ikev1Session {
+    identity: Identity,
     crypto: Crypto,
     initiator: Arc<EndpointData>,
     responder: Arc<EndpointData>,
@@ -213,9 +213,10 @@ impl IsakmpSession for Ikev1Session {
 
 impl Ikev1Session {
     fn new(identity: Identity) -> anyhow::Result<Self> {
-        let crypto = Crypto::new(identity)?;
+        let crypto = Crypto::new()?;
         let nonce: [u8; 32] = random();
         Ok(Self {
+            identity,
             crypto,
             initiator: Arc::new(EndpointData {
                 cookie: random(),
@@ -241,8 +242,21 @@ impl Ikev1Session {
     ) -> anyhow::Result<()> {
         self.sa_bytes = sa_bytes;
 
-        self.crypto.init_cipher(key_len);
-        self.crypto.init_group(group.into())?;
+        let digest = match hash_alg {
+            IkeHashAlgorithm::Sha => DigestType::Sha1,
+            IkeHashAlgorithm::Sha256 => DigestType::Sha256,
+            _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", hash_alg)),
+        };
+
+        let cipher = key_len.try_into()?;
+
+        let group = match group {
+            IkeGroupDescription::Oakley2 => GroupType::Oakley2,
+            IkeGroupDescription::Oakley14 => GroupType::Oakley14,
+            IkeGroupDescription::Other(_) => return Err(anyhow!("Unsupported group: {:?}", group)),
+        };
+
+        self.crypto = Crypto::with_parameters(self.identity.clone(), digest, cipher, group)?;
 
         self.responder = Arc::new(EndpointData {
             cookie: cookie_r,
@@ -254,11 +268,6 @@ impl Ikev1Session {
             ..(*self.initiator).clone()
         });
 
-        match hash_alg {
-            IkeHashAlgorithm::Sha => self.crypto.init_sha1(),
-            IkeHashAlgorithm::Sha256 => self.crypto.init_sha256(),
-            _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", hash_alg)),
-        }
         Ok(())
     }
 
