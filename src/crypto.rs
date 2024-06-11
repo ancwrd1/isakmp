@@ -113,15 +113,6 @@ pub struct Crypto {
 }
 
 impl Crypto {
-    pub fn new() -> anyhow::Result<Self> {
-        Self::with_parameters(
-            Identity::None,
-            DigestType::Sha256,
-            CipherType::Aes256Cbc,
-            GroupType::Oakley2,
-        )
-    }
-
     pub fn with_parameters(
         identity: Identity,
         digest: DigestType,

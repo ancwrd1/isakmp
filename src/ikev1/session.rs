@@ -7,7 +7,7 @@ use rand::random;
 
 use crate::{
     certs::ClientCertificate,
-    crypto::{Crypto, DigestType, GroupType},
+    crypto::{CipherType, Crypto, DigestType, GroupType},
     model::{EspAuthAlgorithm, EspCryptMaterial, Identity, IkeGroupDescription, IkeHashAlgorithm},
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
@@ -213,7 +213,12 @@ impl IsakmpSession for Ikev1Session {
 
 impl Ikev1Session {
     fn new(identity: Identity) -> anyhow::Result<Self> {
-        let crypto = Crypto::new()?;
+        let crypto = Crypto::with_parameters(
+            identity.clone(),
+            DigestType::Sha256,
+            CipherType::Aes256Cbc,
+            GroupType::Oakley2,
+        )?;
         let nonce: [u8; 32] = random();
         Ok(Self {
             identity,
