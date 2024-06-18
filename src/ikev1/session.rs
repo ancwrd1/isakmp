@@ -5,6 +5,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 
+use crate::model::TransformId;
 use crate::{
     certs::ClientCertificate,
     crypto::{CipherType, Crypto, DigestType, GroupType},
@@ -45,12 +46,13 @@ impl Ikev1SyncedSession {
         nonce_i: Bytes,
         spi_r: u32,
         nonce_r: Bytes,
+        transform_id: TransformId,
         auth_alg: EspAuthAlgorithm,
         key_len: usize,
     ) -> anyhow::Result<()> {
         self.0
             .write()
-            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, auth_alg, key_len)
+            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, transform_id, auth_alg, key_len)
     }
 }
 
@@ -357,6 +359,7 @@ impl Ikev1Session {
     fn gen_esp_material(
         &mut self,
         spi: u32,
+        transform_id: TransformId,
         auth_algorithm: EspAuthAlgorithm,
         key_length: usize,
     ) -> anyhow::Result<EspCryptMaterial> {
@@ -385,6 +388,7 @@ impl Ikev1Session {
             spi,
             sk_e,
             sk_a,
+            transform_id,
             auth_algorithm,
             key_length,
         })
@@ -396,6 +400,7 @@ impl Ikev1Session {
         nonce_i: Bytes,
         spi_r: u32,
         nonce_r: Bytes,
+        transform_id: TransformId,
         auth_alg: EspAuthAlgorithm,
         key_len: usize,
     ) -> anyhow::Result<()> {
@@ -411,8 +416,8 @@ impl Ikev1Session {
             ..(*self.responder).clone()
         });
 
-        self.esp_in = Arc::new(self.gen_esp_material(self.initiator.esp_spi, auth_alg, key_len)?);
-        self.esp_out = Arc::new(self.gen_esp_material(self.responder.esp_spi, auth_alg, key_len)?);
+        self.esp_in = Arc::new(self.gen_esp_material(self.initiator.esp_spi, transform_id, auth_alg, key_len)?);
+        self.esp_out = Arc::new(self.gen_esp_material(self.responder.esp_spi, transform_id, auth_alg, key_len)?);
 
         Ok(())
     }

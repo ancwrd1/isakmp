@@ -80,6 +80,7 @@ pub enum TransformId {
     Reserved,
     #[default]
     KeyIke,
+    Esp3Des,
     EspAesCbc,
     Other(u8),
 }
@@ -89,6 +90,7 @@ impl From<u8> for TransformId {
         match value {
             0 => Self::Reserved,
             1 => Self::KeyIke,
+            3 => Self::Esp3Des,
             12 => Self::EspAesCbc,
             other => Self::Other(other),
         }
@@ -100,6 +102,7 @@ impl From<TransformId> for u8 {
         match value {
             TransformId::Reserved => 0,
             TransformId::KeyIke => 1,
+            TransformId::Esp3Des => 3,
             TransformId::EspAesCbc => 12,
             TransformId::Other(u) => u,
         }
@@ -911,6 +914,7 @@ pub struct EspCryptMaterial {
     pub spi: u32,
     pub sk_e: Bytes,
     pub sk_a: Bytes,
+    pub transform_id: TransformId,
     pub key_length: usize,
     pub auth_algorithm: EspAuthAlgorithm,
 }

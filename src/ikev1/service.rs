@@ -128,33 +128,39 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     ) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
-        let proposals = iproduct!(
-            [
-                EspAuthAlgorithm::HmacSha256v2,
-                EspAuthAlgorithm::HmacSha256,
-                EspAuthAlgorithm::HmacSha160,
-                EspAuthAlgorithm::HmacSha96,
-            ],
-            [EspEncapMode::UdpTunnel, EspEncapMode::CheckpointEspInUdp],
-            [256, 192, 128]
-        );
-
-        for (auth, encap, key_len) in proposals {
-            let attributes = vec![
-                DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
-                DataAttribute::long(
-                    EspAttributeType::LifeDuration.into(),
-                    Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-                ),
-                DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
-                DataAttribute::short(EspAttributeType::EncapsulationMode.into(), encap.into()),
-                DataAttribute::short(EspAttributeType::KeyLength.into(), key_len),
-            ];
-            transforms.push(TransformPayload {
-                transform_num: (transforms.len() + 1) as _,
-                transform_id: TransformId::EspAesCbc,
-                attributes,
-            });
+        for (transform_id, key_lengths) in [
+            (TransformId::EspAesCbc, vec![256, 192, 128]),
+            (TransformId::Esp3Des, vec![0]),
+        ] {
+            let proposals = iproduct!(
+                [
+                    EspAuthAlgorithm::HmacSha256v2,
+                    EspAuthAlgorithm::HmacSha256,
+                    EspAuthAlgorithm::HmacSha160,
+                    EspAuthAlgorithm::HmacSha96,
+                ],
+                [EspEncapMode::UdpTunnel, EspEncapMode::CheckpointEspInUdp],
+                key_lengths,
+            );
+            for (auth, encap, key_len) in proposals {
+                let mut attributes = vec![
+                    DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
+                    DataAttribute::long(
+                        EspAttributeType::LifeDuration.into(),
+                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                    ),
+                    DataAttribute::short(EspAttributeType::AuthenticationAlgorithm.into(), auth.into()),
+                    DataAttribute::short(EspAttributeType::EncapsulationMode.into(), encap.into()),
+                ];
+                if key_len != 0 {
+                    attributes.push(DataAttribute::short(EspAttributeType::KeyLength.into(), key_len));
+                }
+                transforms.push(TransformPayload {
+                    transform_num: (transforms.len() + 1) as _,
+                    transform_id,
+                    attributes,
+                });
+            }
         }
 
         let proposal = Payload::Proposal(ProposalPayload {
@@ -672,17 +678,23 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             })
             .ok_or_else(|| anyhow!("No proposal payload in response!"))?;
 
-        let attributes = response
+        let (transform_id, attributes) = response
             .payloads
             .into_iter()
             .find_map(|p| match p {
                 Payload::SecurityAssociation(payload) => payload.payloads.into_iter().find_map(|p| match p {
-                    Payload::Proposal(proposal) => proposal.transforms.into_iter().next().map(|t| t.attributes),
+                    Payload::Proposal(proposal) => proposal
+                        .transforms
+                        .into_iter()
+                        .next()
+                        .map(|t| (t.transform_id, t.attributes)),
                     _ => None,
                 }),
                 _ => None,
             })
             .ok_or_else(|| anyhow!("No attributes in response!"))?;
+
+        debug!("Negotiated transform id: {:?}", transform_id);
 
         let prf = self.session.prf(
             self.session.session_keys().skeyid_a.as_ref(),
@@ -702,17 +714,22 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         debug!("Negotiated ESP auth algorithm: {:?}", auth_alg);
 
-        let key_len = attributes
-            .iter()
-            .find_map(|a| {
-                if a.attribute_type == EspAttributeType::KeyLength.into() {
-                    a.as_short().map(|k| k as usize)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(128)
-            / 8;
+        let key_len = if transform_id == TransformId::EspAesCbc {
+            attributes
+                .iter()
+                .find_map(|a| {
+                    if a.attribute_type == EspAttributeType::KeyLength.into() {
+                        a.as_short().map(|k| k as usize)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(128)
+                / 8
+        } else {
+            // 3DES key length
+            24
+        };
 
         debug!("Negotiated ESP key length: {}", key_len);
 
@@ -729,7 +746,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         self.transport.send(&hash_msg).await?;
 
         self.session
-            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, auth_alg, key_len)?;
+            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, transform_id, auth_alg, key_len)?;
 
         let esp_in = self.session.esp_in();
         let esp_out = self.session.esp_out();
@@ -738,12 +755,14 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         trace!("IN  ENC : {}", hex::encode(&esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&esp_in.sk_a));
         trace!("IN  KEYL: {}", esp_in.key_length);
-        trace!("IN  ALG : {:?}", esp_in.auth_algorithm);
+        trace!("IN  EALG: {:?}", esp_in.transform_id);
+        trace!("IN  AALG: {:?}", esp_in.auth_algorithm);
         trace!("OUT SPI : {:04x}", esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&esp_out.sk_a));
         trace!("OUT KEYL: {}", esp_out.key_length);
-        trace!("OUT ALG : {:?}", esp_out.auth_algorithm);
+        trace!("OUT EALG: {:?}", esp_out.transform_id);
+        trace!("OUT AALG: {:?}", esp_out.auth_algorithm);
 
         debug!("End ESP SA proposal");
 
