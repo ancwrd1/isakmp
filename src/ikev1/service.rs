@@ -95,19 +95,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let vid2 = Payload::VendorId(hex::decode(NATT_VID)?.into());
         let vid3 = Payload::VendorId(hex::decode(EXT_VID_WITH_FLAGS)?.into());
 
-        let mut payloads = vec![sa, vid1, vid2, vid3];
-
-        if let Some(client_cert) = self.session.client_certificate() {
-            payloads.push(Payload::CertificateRequest(CertificatePayload {
-                certificate_type: CertificateType::X509ForSignature,
-                data: client_cert.issuer(),
-            }));
-            payloads.push(Payload::CertificateRequest(CertificatePayload {
-                certificate_type: CertificateType::X509ForSignature,
-                data: Default::default(),
-            }));
-        }
-
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: 0,
@@ -115,7 +102,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
-            payloads,
+            payloads: vec![sa, vid1, vid2, vid3],
         })
     }
 
@@ -264,6 +251,19 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let natd_i_payload = Payload::Natd(BasicPayload::new(hash_i));
 
+        let mut payloads = vec![ke, nonce, natd_r_payload, natd_i_payload];
+
+        if let Some(client_cert) = self.session.client_certificate() {
+            payloads.push(Payload::CertificateRequest(CertificatePayload {
+                certificate_type: CertificateType::X509ForSignature,
+                data: client_cert.issuer(),
+            }));
+            payloads.push(Payload::CertificateRequest(CertificatePayload {
+                certificate_type: CertificateType::X509ForSignature,
+                data: Default::default(),
+            }));
+        }
+
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
@@ -271,7 +271,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
-            payloads: vec![ke, nonce, natd_r_payload, natd_i_payload],
+            payloads,
         })
     }
 
