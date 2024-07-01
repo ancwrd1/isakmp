@@ -491,7 +491,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No hash algorithm in response!"))?;
+            .ok_or_else(|| anyhow!("No key length in response!"))?;
 
         debug!("Negotiated SA key length: {}", key_len);
 
