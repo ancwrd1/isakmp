@@ -54,6 +54,8 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
             self.socket.peer_addr()?
         );
 
+        trace!("Sending message: {:#?}", message);
+
         let port = self.socket.peer_addr()?.port();
 
         if port == NATT_PORT {
@@ -85,6 +87,7 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
                 Some(message) => break message,
             }
         };
+        trace!("Received message: {:#?}", received_message);
         Ok(received_message)
     }
 
