@@ -9,6 +9,7 @@ use cryptoki::{
     session::{Session, UserType},
     types::AuthPin,
 };
+use openssl::x509::X509NameRef;
 use openssl::{
     pkcs12::Pkcs12,
     pkey::{PKey, Private},
@@ -20,11 +21,19 @@ use tracing::debug;
 pub trait ClientCertificate {
     fn issuer(&self) -> Bytes;
 
+    fn issuer_name(&self) -> String;
+
     fn subject(&self) -> Bytes;
+
+    fn subject_name(&self) -> String;
 
     fn certs(&self) -> Vec<Bytes>;
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes>;
+}
+
+fn format_x509_name(name: &X509NameRef) -> String {
+    name.entries().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(",")
 }
 
 struct CertList(Vec<X509>);
@@ -38,12 +47,26 @@ impl CertList {
             .into()
     }
 
+    fn issuer_name(&self) -> String {
+        self.0
+            .first()
+            .map(|c| format_x509_name(c.issuer_name()))
+            .unwrap_or_default()
+    }
+
     fn subject(&self) -> Bytes {
         self.0
             .first()
             .and_then(|c| c.subject_name().to_der().ok())
             .unwrap_or_default()
             .into()
+    }
+
+    fn subject_name(&self) -> String {
+        self.0
+            .first()
+            .map(|c| format_x509_name(c.subject_name()))
+            .unwrap_or_default()
     }
 
     fn certs(&self) -> Vec<Bytes> {
@@ -92,8 +115,16 @@ impl ClientCertificate for Pkcs8Certificate {
         self.certs.issuer()
     }
 
+    fn issuer_name(&self) -> String {
+        self.certs.issuer_name()
+    }
+
     fn subject(&self) -> Bytes {
         self.certs.subject()
+    }
+
+    fn subject_name(&self) -> String {
+        self.certs.subject_name()
     }
 
     fn certs(&self) -> Vec<Bytes> {
@@ -176,8 +207,16 @@ impl ClientCertificate for Pkcs11Certificate {
         self.certs.issuer()
     }
 
+    fn issuer_name(&self) -> String {
+        self.certs.issuer_name()
+    }
+
     fn subject(&self) -> Bytes {
         self.certs.subject()
+    }
+
+    fn subject_name(&self) -> String {
+        self.certs.subject_name()
     }
 
     fn certs(&self) -> Vec<Bytes> {

@@ -48,6 +48,13 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         );
 
         for (auth, key_len, group) in proposals {
+            trace!(
+                "Adding SA transform: auth={:?} key_len={} group={:?}",
+                auth,
+                key_len,
+                group
+            );
+
             let attributes = vec![
                 DataAttribute::short(
                     IkeAttributeType::EncryptionAlgorithm.into(),
@@ -130,6 +137,14 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 key_lengths,
             );
             for (auth, encap, key_len) in proposals {
+                trace!(
+                    "Adding ESP transform: id={:?} auth={:?} encap={:?} key_len={}",
+                    transform_id,
+                    auth,
+                    encap,
+                    key_len
+                );
+
                 let mut attributes = vec![
                     DataAttribute::short(EspAttributeType::LifeType.into(), LifeType::Seconds.into()),
                     DataAttribute::long(
@@ -254,6 +269,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let mut payloads = vec![ke, nonce, natd_r_payload, natd_i_payload];
 
         if let Some(client_cert) = self.session.client_certificate() {
+            trace!(
+                "Adding client certificate request, issuer: {}",
+                client_cert.issuer_name()
+            );
             payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
                 data: client_cert.issuer(),
@@ -309,6 +328,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             let mut payloads = vec![id_payload];
 
             payloads.extend(client_cert.certs().into_iter().map(|cert| {
+                trace!("Adding certificate payload");
                 Payload::Certificate(CertificatePayload {
                     certificate_type: CertificateType::X509ForSignature,
                     data: cert,
