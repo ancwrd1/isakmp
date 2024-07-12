@@ -5,7 +5,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 
-use crate::model::TransformId;
+use crate::model::{EspProposal, TransformId};
 use crate::{
     certs::ClientCertificate,
     crypto::{CipherType, Crypto, DigestType, GroupType},
@@ -40,19 +40,8 @@ impl Ikev1SyncedSession {
         self.0.write().init_from_ke(public_key_r, nonce_r)
     }
 
-    pub fn init_from_qm(
-        &mut self,
-        spi_i: u32,
-        nonce_i: Bytes,
-        spi_r: u32,
-        nonce_r: Bytes,
-        transform_id: TransformId,
-        auth_alg: EspAuthAlgorithm,
-        key_len: usize,
-    ) -> anyhow::Result<()> {
-        self.0
-            .write()
-            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, transform_id, auth_alg, key_len)
+    pub fn init_from_qm(&mut self, proposal: EspProposal) -> anyhow::Result<()> {
+        self.0.write().init_from_qm(proposal)
     }
 }
 
@@ -394,30 +383,31 @@ impl Ikev1Session {
         })
     }
 
-    pub fn init_from_qm(
-        &mut self,
-        spi_i: u32,
-        nonce_i: Bytes,
-        spi_r: u32,
-        nonce_r: Bytes,
-        transform_id: TransformId,
-        auth_alg: EspAuthAlgorithm,
-        key_len: usize,
-    ) -> anyhow::Result<()> {
+    pub fn init_from_qm(&mut self, proposal: EspProposal) -> anyhow::Result<()> {
         self.initiator = Arc::new(EndpointData {
-            esp_spi: spi_i,
-            esp_nonce: nonce_i,
+            esp_spi: proposal.spi_i,
+            esp_nonce: proposal.nonce_i,
             ..(*self.initiator).clone()
         });
 
         self.responder = Arc::new(EndpointData {
-            esp_spi: spi_r,
-            esp_nonce: nonce_r,
+            esp_spi: proposal.spi_r,
+            esp_nonce: proposal.nonce_r,
             ..(*self.responder).clone()
         });
 
-        self.esp_in = Arc::new(self.gen_esp_material(self.initiator.esp_spi, transform_id, auth_alg, key_len)?);
-        self.esp_out = Arc::new(self.gen_esp_material(self.responder.esp_spi, transform_id, auth_alg, key_len)?);
+        self.esp_in = Arc::new(self.gen_esp_material(
+            self.initiator.esp_spi,
+            proposal.transform_id,
+            proposal.auth_alg,
+            proposal.key_len,
+        )?);
+        self.esp_out = Arc::new(self.gen_esp_material(
+            self.responder.esp_spi,
+            proposal.transform_id,
+            proposal.auth_alg,
+            proposal.key_len,
+        )?);
 
         Ok(())
     }

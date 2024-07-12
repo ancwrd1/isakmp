@@ -918,3 +918,14 @@ pub struct EspCryptMaterial {
     pub key_length: usize,
     pub auth_algorithm: EspAuthAlgorithm,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct EspProposal {
+    pub spi_i: u32,
+    pub nonce_i: Bytes,
+    pub spi_r: u32,
+    pub nonce_r: Bytes,
+    pub transform_id: TransformId,
+    pub auth_alg: EspAuthAlgorithm,
+    pub key_len: usize,
+}

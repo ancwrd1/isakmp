@@ -765,8 +765,17 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         self.transport.send(&hash_msg).await?;
 
-        self.session
-            .init_from_qm(spi_i, nonce_i, spi_r, nonce_r, transform_id, auth_alg, key_len)?;
+        let proposal = EspProposal {
+            spi_i,
+            nonce_i,
+            spi_r,
+            nonce_r,
+            transform_id,
+            auth_alg,
+            key_len,
+        };
+
+        self.session.init_from_qm(proposal)?;
 
         let esp_in = self.session.esp_in();
         let esp_out = self.session.esp_out();
