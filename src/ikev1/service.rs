@@ -1,5 +1,4 @@
-use std::net::Ipv4Addr;
-use std::time::Duration;
+use std::{net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::anyhow;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -9,8 +8,8 @@ use rand::random;
 use tracing::{debug, trace};
 
 use crate::{
-    ikev1::session::Ikev1SyncedSession, message::IsakmpMessage, model::*, payload::*, session::IsakmpSession,
-    transport::IsakmpTransport,
+    certs::CertList, ikev1::session::Ikev1SyncedSession, message::IsakmpMessage, model::*, payload::*,
+    session::IsakmpSession, transport::IsakmpTransport,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -598,21 +597,56 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok((self.get_attributes_payload(attr_response)?, message_id))
     }
 
-    pub async fn do_identity_protection(&mut self, notify_data: Bytes) -> anyhow::Result<IdentificationPayload> {
+    pub async fn do_identity_protection<P, I>(
+        &mut self,
+        notify_data: Bytes,
+        verify_certs: bool,
+        ca_certs: I,
+    ) -> anyhow::Result<IdentificationPayload>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
         debug!("Begin identity protection");
 
         let request = self.build_id_protection(notify_data)?;
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
-        response
+        if verify_certs {
+            let certs = response
+                .payloads
+                .iter()
+                .filter_map(|payload| match payload {
+                    Payload::Certificate(cert) => Some(cert.data.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            if !certs.is_empty() {
+                let mut ca_cert_vec = Vec::new();
+
+                for cert in ca_certs {
+                    let data = std::fs::read(cert.as_ref())?;
+                    ca_cert_vec.push(data.into());
+                }
+                let cert_list = CertList::from_ipsec(&certs)?;
+                cert_list.verify(&ca_cert_vec)?;
+            } else {
+                return Err(anyhow!("No IPSec certificates returned from the server!"));
+            }
+        }
+
+        let result = response
             .payloads
             .into_iter()
             .find_map(|payload| match payload {
                 Payload::Identification(id) => Some(id),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No identification payload in response!"))
+            .ok_or_else(|| anyhow!("No identification payload in response!"))?;
+
+        Ok(result)
     }
 
     pub async fn send_auth_attribute(

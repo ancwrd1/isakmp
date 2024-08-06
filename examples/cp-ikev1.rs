@@ -1,6 +1,7 @@
 use std::{
     io::{stdin, stdout, Write},
     net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -190,6 +191,12 @@ async fn main() -> anyhow::Result<()> {
         _ => Identity::None,
     };
 
+    let (verify_certs, ca_certs) = if matches!(args.get(2).map(|s| s.as_str()), Some("validate")) {
+        (true, vec![PathBuf::from(&args[3])])
+    } else {
+        (false, Vec::new())
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -225,7 +232,9 @@ async fn main() -> anyhow::Result<()> {
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
-    service.do_identity_protection(Bytes::from_static(CCC_ID)).await?;
+    service
+        .do_identity_protection::<PathBuf, _>(Bytes::from_static(CCC_ID), verify_certs, ca_certs)
+        .await?;
 
     if matches!(identity, Identity::None) {
         let (mut auth_attrs, message_id) = service.get_auth_attributes().await?;

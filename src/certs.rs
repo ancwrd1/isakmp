@@ -9,14 +9,18 @@ use cryptoki::{
     session::{Session, UserType},
     types::AuthPin,
 };
-use openssl::x509::X509NameRef;
 use openssl::{
     pkcs12::Pkcs12,
     pkey::{PKey, Private},
     rsa::Padding,
-    x509::X509,
+    stack::Stack,
+    x509::{store::X509StoreBuilder, X509NameRef, X509StoreContext, X509},
 };
 use tracing::debug;
+
+pub fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
+    Ok(X509::from_der(data).or_else(|_| X509::from_pem(data))?)
+}
 
 pub trait ClientCertificate {
     fn issuer(&self) -> Bytes;
@@ -36,9 +40,44 @@ fn format_x509_name(name: &X509NameRef) -> String {
     name.entries().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(",")
 }
 
-struct CertList(Vec<X509>);
+pub struct CertList(Vec<X509>);
 
 impl CertList {
+    pub fn from_ipsec(certs: &[Bytes]) -> anyhow::Result<Self> {
+        let mut x509_list = Vec::new();
+        for cert in certs {
+            x509_list.push(from_der_or_pem(cert)?);
+        }
+        Ok(Self(x509_list))
+    }
+
+    pub fn verify(&self, ca_certs: &[Bytes]) -> anyhow::Result<()> {
+        debug!("Validating IPSec certificate: {}", self.subject_name());
+        debug!("Certificate issuer: {}", self.issuer_name());
+
+        let mut chain = Stack::new()?;
+
+        for cert in &self.0[1..] {
+            chain.push(cert.clone())?;
+        }
+
+        let mut store_bldr = X509StoreBuilder::new()?;
+
+        for ca in ca_certs {
+            store_bldr.add_cert(from_der_or_pem(ca)?)?;
+        }
+
+        let store = store_bldr.build();
+
+        let mut context = X509StoreContext::new()?;
+        if context.init(&store, &self.0[0], &chain, |c| c.verify_cert())? {
+            debug!("IPSec certificate validation succeeded!");
+            Ok(())
+        } else {
+            Err(anyhow!("IPSec certificate validation failed!"))
+        }
+    }
+
     fn issuer(&self) -> Bytes {
         self.0
             .first()
