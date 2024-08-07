@@ -16,7 +16,7 @@ use openssl::{
     stack::Stack,
     x509::{store::X509StoreBuilder, X509NameRef, X509StoreContext, X509},
 };
-use tracing::debug;
+use tracing::{debug, trace};
 
 pub fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
     Ok(X509::from_der(data).or_else(|_| X509::from_pem(data))?)
@@ -53,11 +53,15 @@ impl CertList {
 
     pub fn verify(&self, ca_certs: &[Bytes]) -> anyhow::Result<()> {
         debug!("Validating IPSec certificate: {}", self.subject_name());
+
+        trace!("Entity certificate: {:#?}", &self.0[0]);
+
         debug!("Certificate issuer: {}", self.issuer_name());
 
         let mut chain = Stack::new()?;
 
         for cert in &self.0[1..] {
+            trace!("Chain certificate: {:#?}", cert);
             chain.push(cert.clone())?;
         }
 
