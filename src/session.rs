@@ -36,7 +36,9 @@ pub trait IsakmpSession {
     where
         I: IntoIterator<Item = T>,
         T: AsRef<[u8]>;
-    fn hash_id(&self, data: &[u8]) -> anyhow::Result<Bytes>;
+    fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes>;
+    fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes>;
+    fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()>;
     fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
     where
         I: IntoIterator<Item = T>,

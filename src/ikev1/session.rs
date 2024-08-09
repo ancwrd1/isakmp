@@ -66,8 +66,16 @@ impl IsakmpSession for Ikev1SyncedSession {
         self.0.read().hash(data)
     }
 
-    fn hash_id(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        self.0.read().hash_id(data)
+    fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        self.0.read().hash_id_i(data)
+    }
+
+    fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        self.0.read().hash_id_r(data)
+    }
+
+    fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        self.0.read().verify(hash, signature, cert)
     }
 
     fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
@@ -154,7 +162,7 @@ impl IsakmpSession for Ikev1Session {
         self.crypto.hash(data)
     }
 
-    fn hash_id(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+    fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         // RFC2409: HASH_I = prf(SKEYID, g^xi | g^xr | CKY-I | CKY-R | SAi_b | IDii_b )
         self.crypto.prf(
             &self.session_keys.skeyid,
@@ -167,6 +175,25 @@ impl IsakmpSession for Ikev1Session {
                 data,
             ],
         )
+    }
+
+    fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        // RFC2409: HASH_R = prf(SKEYID, g^xr | g^xi | CKY-R | CKY-I | SAi_b | IDir_b )
+        self.crypto.prf(
+            &self.session_keys.skeyid,
+            [
+                self.responder.public_key.as_ref(),
+                self.initiator.public_key.as_ref(),
+                &self.responder.cookie.to_be_bytes(),
+                &self.initiator.cookie.to_be_bytes(),
+                self.sa_bytes.as_ref(),
+                data,
+            ],
+        )
+    }
+
+    fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        self.crypto.verify(hash, signature, cert)
     }
 
     fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>

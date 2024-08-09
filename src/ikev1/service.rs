@@ -321,7 +321,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             data: notify_data,
         });
 
-        let hash_i = self.session.hash_id(id_payload.to_bytes().as_ref())?;
+        let hash_i = self.session.hash_id_i(id_payload.to_bytes().as_ref())?;
 
         let payloads = if let Some(client_cert) = self.session.client_certificate() {
             let mut payloads = vec![id_payload];
@@ -599,10 +599,11 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
     pub async fn do_identity_protection<P, I>(
         &mut self,
+        ipaddr: Ipv4Addr,
         notify_data: Bytes,
         verify_certs: bool,
         ca_certs: I,
-    ) -> anyhow::Result<IdentificationPayload>
+    ) -> anyhow::Result<()>
     where
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
@@ -613,16 +614,47 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
-        if verify_certs {
-            let certs = response
-                .payloads
-                .iter()
-                .filter_map(|payload| match payload {
-                    Payload::Certificate(cert) => Some(cert.data.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+        let signature = response.payloads.iter().find_map(|payload| match payload {
+            Payload::Signature(data) => Some(data.data.clone()),
+            _ => None,
+        });
 
+        let id = response.payloads.iter().find_map(|payload| match payload {
+            Payload::Identification(data) => Some(data),
+            _ => None,
+        });
+
+        let certs = response
+            .payloads
+            .iter()
+            .filter_map(|payload| match payload {
+                Payload::Certificate(cert) => Some(cert.data.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        match (signature, id, &certs[..]) {
+            (Some(signature), Some(id), [cert, ..]) => {
+                if IdentityType::from(id.id_type) == IdentityType::Ipv4Address {
+                    let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
+                    if id_addr != ipaddr {
+                        return Err(anyhow!("Mismatched IP address in the ID response!"));
+                    }
+                    debug!("IP address from ID payload: {}", id_addr);
+                }
+
+                let data = id.to_bytes();
+                let hash = self.session.hash_id_r(&data)?;
+                self.session().verify(&hash, &signature, cert)?;
+
+                debug!("ID payload signature validation succeeded!");
+            }
+            _ => {
+                return Err(anyhow!("Incomplete ID payload received!"));
+            }
+        }
+
+        if verify_certs {
             if !certs.is_empty() {
                 let mut ca_cert_vec = Vec::new();
 
@@ -637,16 +669,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             }
         }
 
-        let result = response
-            .payloads
-            .into_iter()
-            .find_map(|payload| match payload {
-                Payload::Identification(id) => Some(id),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("No identification payload in response!"))?;
-
-        Ok(result)
+        Ok(())
     }
 
     pub async fn send_auth_attribute(

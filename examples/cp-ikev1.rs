@@ -233,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
     service
-        .do_identity_protection::<PathBuf, _>(Bytes::from_static(CCC_ID), verify_certs, ca_certs)
+        .do_identity_protection::<PathBuf, _>(gateway_addr, Bytes::from_static(CCC_ID), verify_certs, ca_certs)
         .await?;
 
     if matches!(identity, Identity::None) {

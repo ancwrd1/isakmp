@@ -18,7 +18,7 @@ use openssl::{
 };
 use tracing::{debug, trace};
 
-pub fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
+fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
     Ok(X509::from_der(data).or_else(|_| X509::from_pem(data))?)
 }
 

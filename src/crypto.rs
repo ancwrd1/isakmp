@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use crate::{
+    certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
+    model::Identity,
+};
 use anyhow::anyhow;
 use bytes::Bytes;
 use openssl::{
@@ -7,13 +11,10 @@ use openssl::{
     dh::Dh,
     hash::{Hasher, MessageDigest},
     pkey::{PKey, Private},
+    rsa::Padding,
     sign::Signer,
     symm::{Cipher, Crypter, Mode},
-};
-
-use crate::{
-    certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
-    model::Identity,
+    x509::X509,
 };
 
 // RFC2409: Oakley group 2
@@ -210,5 +211,20 @@ impl Crypto {
 
     pub fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
         self.client_cert.clone()
+    }
+
+    pub fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        let cert = X509::from_der(cert)?;
+        let key = cert.public_key()?;
+
+        let mut buf = vec![0u8; 256];
+
+        let size = key.rsa()?.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
+
+        if &buf[..size] == hash {
+            Ok(())
+        } else {
+            Err(anyhow!("Signature validation failed!"))
+        }
     }
 }
