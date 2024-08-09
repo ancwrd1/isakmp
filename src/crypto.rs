@@ -217,9 +217,11 @@ impl Crypto {
         let cert = X509::from_der(cert)?;
         let key = cert.public_key()?;
 
-        let mut buf = vec![0u8; 256];
+        let rsa = key.rsa()?;
 
-        let size = key.rsa()?.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
+        let mut buf = vec![0u8; rsa.size() as usize];
+
+        let size = rsa.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
 
         if &buf[..size] == hash {
             Ok(())
