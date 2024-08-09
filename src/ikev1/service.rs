@@ -5,7 +5,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::iproduct;
 use rand::random;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{
     certs::CertList, ikev1::session::Ikev1SyncedSession, message::IsakmpMessage, model::*, payload::*,
@@ -599,8 +599,8 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
     pub async fn do_identity_protection<P, I>(
         &mut self,
-        ipaddr: Ipv4Addr,
-        notify_data: Bytes,
+        gateway_addr: Ipv4Addr,
+        auth_data: Bytes,
         verify_certs: bool,
         ca_certs: I,
     ) -> anyhow::Result<()>
@@ -610,7 +610,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
     {
         debug!("Begin identity protection");
 
-        let request = self.build_id_protection(notify_data)?;
+        let request = self.build_id_protection(auth_data)?;
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
@@ -635,12 +635,18 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         match (signature, id, &certs[..]) {
             (Some(signature), Some(id), [cert, ..]) => {
-                if IdentityType::from(id.id_type) == IdentityType::Ipv4Address {
+                let id_type = IdentityType::from(id.id_type);
+                if id_type == IdentityType::Ipv4Address {
                     let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
-                    if id_addr != ipaddr {
-                        return Err(anyhow!("Mismatched IP address in the ID response!"));
-                    }
                     debug!("IP address from ID payload: {}", id_addr);
+                    if id_addr != gateway_addr {
+                        return Err(anyhow!(
+                            "Mismatched IP address in the ID payload, expected: {}",
+                            gateway_addr
+                        ));
+                    }
+                } else {
+                    warn!("Unknown ID payload type: {:?}", id_type);
                 }
 
                 let data = id.to_bytes();
@@ -655,18 +661,15 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         }
 
         if verify_certs {
-            if !certs.is_empty() {
-                let mut ca_cert_vec = Vec::new();
+            let mut ca_cert_vec = Vec::new();
 
-                for cert in ca_certs {
-                    let data = std::fs::read(cert.as_ref())?;
-                    ca_cert_vec.push(data.into());
-                }
-                let cert_list = CertList::from_ipsec(&certs)?;
-                cert_list.verify(&ca_cert_vec)?;
-            } else {
-                return Err(anyhow!("No IPSec certificates returned from the server!"));
+            for cert in ca_certs {
+                let data = std::fs::read(cert.as_ref())?;
+                ca_cert_vec.push(data.into());
             }
+            let cert_list = CertList::from_ipsec(&certs)?;
+
+            cert_list.verify(&ca_cert_vec)?;
         }
 
         Ok(())
