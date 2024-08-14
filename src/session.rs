@@ -1,8 +1,10 @@
-use crate::certs::ClientCertificate;
-use bytes::Bytes;
 use std::sync::Arc;
 
-use crate::model::EspCryptMaterial;
+use crate::{
+    certs::ClientCertificate,
+    model::{EspCryptMaterial, EspProposal, IkeGroupDescription, IkeHashAlgorithm},
+};
+use bytes::Bytes;
 
 #[derive(Default, Clone)]
 pub struct SessionKeys {
@@ -23,6 +25,17 @@ pub struct EndpointData {
 }
 
 pub trait IsakmpSession {
+    fn init_from_sa(
+        &mut self,
+        cookie_r: u64,
+        sa_bytes: Bytes,
+        hash_alg: IkeHashAlgorithm,
+        key_len: usize,
+        group: IkeGroupDescription,
+    ) -> anyhow::Result<()>;
+    fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()>;
+
+    fn init_from_qm(&mut self, proposal: EspProposal) -> anyhow::Result<()>;
     fn cookie_i(&self) -> u64 {
         self.initiator().cookie
     }

@@ -18,13 +18,13 @@ use tokio::{
 use tracing_subscriber::EnvFilter;
 
 use isakmp::{
-    ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1SyncedSession},
+    ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
     payload::AttributesPayload,
     transport::UdpTransport,
 };
 
-type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<Ikev1SyncedSession>>>;
+type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<Ikev1Session>>>;
 
 const CCC_ID: &[u8] = b"(\n\
                :clientType (TRAC)\n\
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
-    let session = Ikev1SyncedSession::new(identity.clone())?;
+    let session = Ikev1Session::new(identity.clone())?;
     let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
     let mut service = Ikev1Service::new(transport, session)?;
 

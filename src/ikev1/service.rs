@@ -8,7 +8,7 @@ use rand::random;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    certs::CertList, ikev1::session::Ikev1SyncedSession, message::IsakmpMessage, model::*, payload::*,
+    certs::CertList, ikev1::session::Ikev1Session, message::IsakmpMessage, model::*, payload::*,
     session::IsakmpSession, transport::IsakmpTransport,
 };
 
@@ -17,11 +17,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Ikev1Service<T> {
     socket_timeout: Duration,
     transport: T,
-    session: Ikev1SyncedSession,
+    session: Ikev1Session,
 }
 
 impl<T: IsakmpTransport + Send> Ikev1Service<T> {
-    pub fn new(transport: T, session: Ikev1SyncedSession) -> anyhow::Result<Self> {
+    pub fn new(transport: T, session: Ikev1Session) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -33,7 +33,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         &mut self.transport
     }
 
-    pub fn session(&self) -> Ikev1SyncedSession {
+    pub fn session(&self) -> Ikev1Session {
         self.session.clone()
     }
 
