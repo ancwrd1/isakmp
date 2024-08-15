@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use rand::random;
 
 use crate::{
-    certs::ClientCertificate,
+    certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
     crypto::{CipherType, Crypto, DigestType, GroupType},
     model::*,
     session::{EndpointData, IsakmpSession, SessionKeys},
@@ -71,8 +71,8 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().hash_id_r(data)
     }
 
-    fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
-        self.0.read().verify(hash, signature, cert)
+    fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        self.0.read().verify_signature(hash, signature, cert)
     }
 
     fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
@@ -109,8 +109,8 @@ impl IsakmpSession for Ikev1Session {
 }
 
 struct Ikev1SessionImpl {
-    identity: Identity,
     crypto: Crypto,
+    client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
     initiator: Arc<EndpointData>,
     responder: Arc<EndpointData>,
     session_keys: Arc<SessionKeys>,
@@ -118,6 +118,89 @@ struct Ikev1SessionImpl {
     sa_bytes: Bytes,
     esp_in: Arc<EspCryptMaterial>,
     esp_out: Arc<EspCryptMaterial>,
+}
+
+impl Ikev1SessionImpl {
+    fn new(identity: Identity) -> anyhow::Result<Self> {
+        let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
+            Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
+            Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
+            Identity::Pkcs11 {
+                driver_path,
+                pin,
+                key_id,
+            } => Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
+            Identity::None => None,
+        };
+
+        let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, GroupType::Oakley2)?;
+
+        Ok(Self {
+            crypto,
+            client_cert,
+            initiator: Arc::new(EndpointData {
+                cookie: random(),
+                nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
+                ..Default::default()
+            }),
+            responder: Default::default(),
+            session_keys: Default::default(),
+            iv: Default::default(),
+            sa_bytes: Default::default(),
+            esp_in: Default::default(),
+            esp_out: Default::default(),
+        })
+    }
+
+    fn gen_esp_material(
+        &mut self,
+        spi: u32,
+        transform_id: TransformId,
+        auth_algorithm: EspAuthAlgorithm,
+        key_length: usize,
+    ) -> anyhow::Result<EspCryptMaterial> {
+        let keymat_len = key_length + auth_algorithm.key_len();
+
+        let mut data = Vec::new();
+        let mut seed = Bytes::new();
+        while data.len() < keymat_len {
+            seed = self.crypto.prf(
+                &self.session_keys.skeyid_d,
+                [
+                    seed.as_ref(),
+                    &[3],
+                    spi.to_be_bytes().as_slice(),
+                    &self.initiator.esp_nonce,
+                    &self.responder.esp_nonce,
+                ],
+            )?;
+            data.extend(&seed);
+        }
+
+        let sk_e = Bytes::copy_from_slice(&data[0..key_length]);
+        let sk_a = Bytes::copy_from_slice(&data[key_length..keymat_len]);
+
+        Ok(EspCryptMaterial {
+            spi,
+            sk_e,
+            sk_a,
+            transform_id,
+            auth_algorithm,
+            key_length,
+        })
+    }
+
+    pub fn retrieve_iv(&mut self, message_id: u32) -> Bytes {
+        let zero_iv = self.iv[&0].clone();
+        self.iv
+            .entry(message_id)
+            .or_insert_with(|| {
+                let mut hash = self.crypto.hash([zero_iv.as_ref(), &message_id.to_be_bytes()]).unwrap();
+                hash.truncate(self.crypto.block_size());
+                hash
+            })
+            .clone()
+    }
 }
 
 impl IsakmpSession for Ikev1SessionImpl {
@@ -145,7 +228,7 @@ impl IsakmpSession for Ikev1SessionImpl {
             IkeGroupDescription::Other(_) => return Err(anyhow!("Unsupported group: {:?}", group)),
         };
 
-        self.crypto = Crypto::with_parameters(self.identity.clone(), digest, cipher, group)?;
+        self.crypto = Crypto::with_parameters(digest, cipher, group)?;
 
         self.responder = Arc::new(EndpointData {
             cookie: cookie_r,
@@ -335,8 +418,8 @@ impl IsakmpSession for Ikev1SessionImpl {
         )
     }
 
-    fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
-        self.crypto.verify(hash, signature, cert)
+    fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        self.crypto.verify_signature(hash, signature, cert)
     }
 
     fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
@@ -356,7 +439,7 @@ impl IsakmpSession for Ikev1SessionImpl {
     }
 
     fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
-        self.crypto.client_certificate()
+        self.client_cert.clone()
     }
 
     fn initiator(&self) -> Arc<EndpointData> {
@@ -369,82 +452,5 @@ impl IsakmpSession for Ikev1SessionImpl {
 
     fn session_keys(&self) -> Arc<SessionKeys> {
         self.session_keys.clone()
-    }
-}
-
-impl Ikev1SessionImpl {
-    fn new(identity: Identity) -> anyhow::Result<Self> {
-        let crypto = Crypto::with_parameters(
-            identity.clone(),
-            DigestType::Sha256,
-            CipherType::Aes256Cbc,
-            GroupType::Oakley2,
-        )?;
-        let nonce: [u8; 32] = random();
-        Ok(Self {
-            identity,
-            crypto,
-            initiator: Arc::new(EndpointData {
-                cookie: random(),
-                nonce: Bytes::copy_from_slice(&nonce),
-                ..Default::default()
-            }),
-            responder: Default::default(),
-            session_keys: Default::default(),
-            iv: Default::default(),
-            sa_bytes: Default::default(),
-            esp_in: Default::default(),
-            esp_out: Default::default(),
-        })
-    }
-
-    fn gen_esp_material(
-        &mut self,
-        spi: u32,
-        transform_id: TransformId,
-        auth_algorithm: EspAuthAlgorithm,
-        key_length: usize,
-    ) -> anyhow::Result<EspCryptMaterial> {
-        let keymat_len = key_length + auth_algorithm.key_len();
-
-        let mut data = Vec::new();
-        let mut seed = Bytes::new();
-        while data.len() < keymat_len {
-            seed = self.crypto.prf(
-                &self.session_keys.skeyid_d,
-                [
-                    seed.as_ref(),
-                    &[3],
-                    spi.to_be_bytes().as_slice(),
-                    &self.initiator.esp_nonce,
-                    &self.responder.esp_nonce,
-                ],
-            )?;
-            data.extend(&seed);
-        }
-
-        let sk_e = Bytes::copy_from_slice(&data[0..key_length]);
-        let sk_a = Bytes::copy_from_slice(&data[key_length..keymat_len]);
-
-        Ok(EspCryptMaterial {
-            spi,
-            sk_e,
-            sk_a,
-            transform_id,
-            auth_algorithm,
-            key_length,
-        })
-    }
-
-    pub fn retrieve_iv(&mut self, message_id: u32) -> Bytes {
-        let zero_iv = self.iv[&0].clone();
-        self.iv
-            .entry(message_id)
-            .or_insert_with(|| {
-                let mut hash = self.crypto.hash([zero_iv.as_ref(), &message_id.to_be_bytes()]).unwrap();
-                hash.truncate(self.crypto.block_size());
-                hash
-            })
-            .clone()
     }
 }

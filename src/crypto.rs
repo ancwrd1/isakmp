@@ -1,9 +1,3 @@
-use std::sync::Arc;
-
-use crate::{
-    certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
-    model::Identity,
-};
 use anyhow::anyhow;
 use bytes::Bytes;
 use openssl::{
@@ -110,32 +104,14 @@ pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
     cipher: Cipher,
-    client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
 }
 
 impl Crypto {
-    pub fn with_parameters(
-        identity: Identity,
-        digest: DigestType,
-        cipher: CipherType,
-        group: GroupType,
-    ) -> anyhow::Result<Self> {
-        let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
-            Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
-            Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
-            Identity::Pkcs11 {
-                driver_path,
-                pin,
-                key_id,
-            } => Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
-            Identity::None => None,
-        };
-
+    pub fn with_parameters(digest: DigestType, cipher: CipherType, group: GroupType) -> anyhow::Result<Self> {
         Ok(Self {
             dh2: group.try_into()?,
             digest: digest.into(),
             cipher: cipher.into(),
-            client_cert,
         })
     }
 
@@ -179,8 +155,8 @@ impl Crypto {
         Ok(hasher.finish()?.to_vec().into())
     }
 
-    fn enc_dec(&self, mode: Mode, key: &[u8], data: &[u8], iv: Option<&[u8]>) -> anyhow::Result<Bytes> {
-        let mut crypter = Crypter::new(self.cipher, mode, key, iv)?;
+    fn enc_dec(&self, mode: Mode, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
+        let mut crypter = Crypter::new(self.cipher, mode, key, Some(iv))?;
         crypter.pad(false);
         let mut out = vec![0; data.len() + self.cipher.block_size()];
         let count = crypter.update(data, &mut out)?;
@@ -190,11 +166,11 @@ impl Crypto {
     }
 
     pub fn encrypt(&self, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
-        self.enc_dec(Mode::Encrypt, key, data, Some(iv))
+        self.enc_dec(Mode::Encrypt, key, data, iv)
     }
 
     pub fn decrypt(&self, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
-        self.enc_dec(Mode::Decrypt, key, data, Some(iv))
+        self.enc_dec(Mode::Decrypt, key, data, iv)
     }
 
     pub fn block_size(&self) -> usize {
@@ -209,24 +185,15 @@ impl Crypto {
         self.digest.size()
     }
 
-    pub fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
-        self.client_cert.clone()
-    }
-
-    pub fn verify(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
-        let cert = X509::from_der(cert)?;
-        let key = cert.public_key()?;
-
-        let rsa = key.rsa()?;
+    pub fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+        let rsa = X509::from_der(cert)?.public_key()?.rsa()?;
 
         let mut buf = vec![0u8; rsa.size() as usize];
 
-        let size = rsa.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
+        let len = rsa.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
 
-        if &buf[..size] == hash {
-            Ok(())
-        } else {
-            Err(anyhow!("Signature validation failed!"))
-        }
+        (&buf[..len] == hash)
+            .then_some(())
+            .ok_or_else(|| anyhow!("Signature verification failed!"))
     }
 }

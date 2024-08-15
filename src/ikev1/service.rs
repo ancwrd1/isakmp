@@ -638,7 +638,9 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 let id_type = IdentityType::from(id.id_type);
                 if id_type == IdentityType::Ipv4Address {
                     let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
+
                     debug!("IP address from ID payload: {}", id_addr);
+
                     if id_addr != gateway_addr {
                         return Err(anyhow!(
                             "Mismatched IP address in the ID payload, expected: {}",
@@ -651,9 +653,9 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
                 let data = id.to_bytes();
                 let hash = self.session.hash_id_r(&data)?;
-                self.session().verify(&hash, &signature, cert)?;
+                self.session().verify_signature(&hash, &signature, cert)?;
 
-                debug!("ID payload signature validation succeeded!");
+                debug!("ID payload signature verification succeeded!");
             }
             _ => {
                 return Err(anyhow!("Incomplete ID payload received!"));
