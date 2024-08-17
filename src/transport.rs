@@ -13,6 +13,21 @@ use crate::{
 
 const NATT_PORT: u16 = 4500;
 
+fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
+    if msg.exchange_type == ExchangeType::Informational {
+        for payload in &msg.payloads {
+            if let Payload::Notification(notify) = payload {
+                if notify.message_type == 31 || notify.message_type == 9101 {
+                    return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
+                } else if notify.message_type < 31 {
+                    return Err(anyhow!("IKE notify error {}", notify.message_type));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 pub trait IsakmpTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()>;
@@ -28,31 +43,23 @@ pub trait IsakmpTransport {
 pub struct UdpTransport<C> {
     socket: UdpSocket,
     codec: C,
+    receive_buffer: Vec<u8>,
 }
 
 impl<C: IsakmpMessageCodec> UdpTransport<C> {
     pub fn new(socket: UdpSocket, codec: C) -> Self {
-        Self { socket, codec }
+        Self {
+            socket,
+            codec,
+            receive_buffer: vec![0u8; 65536],
+        }
     }
 
-    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
-        debug!("Parsing ISAKMP message of size {}", data.len());
-        match self.codec.decode(data)? {
-            Some(msg) => {
-                if msg.exchange_type == ExchangeType::Informational {
-                    for payload in &msg.payloads {
-                        if let Payload::Notification(notify) = payload {
-                            if notify.message_type == 31 || notify.message_type == 9101 {
-                                return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
-                            } else if notify.message_type < 31 {
-                                return Err(anyhow!("IKE notify error {}", notify.message_type));
-                            }
-                        }
-                    }
-                }
-                Ok(Some(msg))
-            }
-            None => Ok(None),
+    fn message_offset(&self) -> anyhow::Result<usize> {
+        if self.socket.peer_addr()?.port() == NATT_PORT {
+            Ok(4)
+        } else {
+            Ok(0)
         }
     }
 }
@@ -62,16 +69,14 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
         let data = self.codec.encode(message);
         debug!(
-            "Sending ISAKMP message of size {} to {}",
+            "Sending ISAKMP message, len: {}, to: {}",
             data.len(),
             self.socket.peer_addr()?
         );
 
-        trace!("Sending message: {:#?}", message);
+        trace!("Sending ISAKMP message: {:#?}", message);
 
-        let port = self.socket.peer_addr()?.port();
-
-        if port == NATT_PORT {
+        if self.message_offset()? == 4 {
             let mut send_buffer = vec![0u8, 0, 0, 0];
             send_buffer.extend(&data);
             self.socket.send(&send_buffer).await?;
@@ -83,24 +88,22 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
     }
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
-        let mut receive_buffer = [0u8; 65536];
         let received_message = loop {
-            let (size, _) = tokio::time::timeout(timeout, self.socket.recv_from(&mut receive_buffer)).await??;
+            let (len, _) = tokio::time::timeout(timeout, self.socket.recv_from(&mut self.receive_buffer)).await??;
 
-            let port = self.socket.peer_addr()?.port();
+            debug!("Received ISAKMP message, len: {}", len);
 
-            let data = if port == NATT_PORT {
-                &receive_buffer[4..size]
-            } else {
-                &receive_buffer[0..size]
-            };
-
-            match self.parse_data(data)? {
+            match self.codec.decode(&self.receive_buffer[self.message_offset()?..len])? {
+                Some(msg) => {
+                    check_informational(&msg)?;
+                    break msg;
+                }
                 None => continue,
-                Some(message) => break message,
             }
         };
-        trace!("Received message: {:#?}", received_message);
+
+        trace!("Received ISAKMP message: {:#?}", received_message);
+
         Ok(received_message)
     }
 }
