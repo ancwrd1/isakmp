@@ -29,10 +29,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         })
     }
 
-    pub fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
-    }
-
     pub fn session(&self) -> Ikev1Session {
         self.session.clone()
     }
