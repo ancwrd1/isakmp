@@ -55,6 +55,10 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().cipher_block_size()
     }
 
+    fn validate_message_hash(&mut self, data: &[u8]) -> bool {
+        self.0.write().validate_message_hash(data)
+    }
+
     fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
     where
         I: IntoIterator<Item = T>,
@@ -116,6 +120,7 @@ struct Ikev1SessionImpl {
     session_keys: Arc<SessionKeys>,
     iv: HashMap<u32, Bytes>,
     sa_bytes: Bytes,
+    received_hashes: Vec<Bytes>,
     esp_in: Arc<EspCryptMaterial>,
     esp_out: Arc<EspCryptMaterial>,
 }
@@ -147,6 +152,7 @@ impl Ikev1SessionImpl {
             session_keys: Default::default(),
             iv: Default::default(),
             sa_bytes: Default::default(),
+            received_hashes: Vec::new(),
             esp_in: Default::default(),
             esp_out: Default::default(),
         })
@@ -378,6 +384,16 @@ impl IsakmpSession for Ikev1SessionImpl {
 
     fn cipher_block_size(&self) -> usize {
         self.crypto.block_size()
+    }
+
+    fn validate_message_hash(&mut self, data: &[u8]) -> bool {
+        let hash = self.hash([data]).expect("Hash computation should not fail");
+        if !self.received_hashes.contains(&hash) {
+            self.received_hashes.push(hash);
+            true
+        } else {
+            false
+        }
     }
 
     fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>

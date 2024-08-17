@@ -1,14 +1,14 @@
 use std::io::{Cursor, Read};
 
-use byteorder::{BigEndian, ReadBytesExt};
-use bytes::{BufMut, Bytes, BytesMut};
-
 use crate::{
     message::{IsakmpMessage, IsakmpMessageCodec},
     model::{ExchangeType, IsakmpFlags, PayloadType},
     payload::Payload,
     session::IsakmpSession,
 };
+use byteorder::{BigEndian, ReadBytesExt};
+use bytes::{BufMut, Bytes, BytesMut};
+use tracing::trace;
 
 pub struct Ikev1Codec<S> {
     session: S,
@@ -61,7 +61,14 @@ impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
         buf.freeze()
     }
 
-    fn decode<R: Read>(&mut self, reader: &mut R) -> anyhow::Result<IsakmpMessage> {
+    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
+        if !self.session.validate_message_hash(data) {
+            trace!("Discarding duplicate message");
+            return Ok(None);
+        }
+
+        let mut reader = Cursor::new(data);
+
         let cookie_i = reader.read_u64::<BigEndian>()?;
         let cookie_r = reader.read_u64::<BigEndian>()?;
         let next_payload: PayloadType = reader.read_u8()?.into();
@@ -82,7 +89,7 @@ impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
 
         let payloads = Payload::parse_all(next_payload, &mut cursor)?;
 
-        Ok(IsakmpMessage {
+        Ok(Some(IsakmpMessage {
             cookie_i,
             cookie_r,
             version,
@@ -90,10 +97,6 @@ impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
             flags,
             message_id,
             payloads,
-        })
-    }
-
-    fn compute_hash(&self, data: &[u8]) -> Bytes {
-        self.session.hash([data]).expect("Hash computation should not fail!")
+        }))
     }
 }

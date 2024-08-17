@@ -1,8 +1,7 @@
-use std::{io::Cursor, time::Duration};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use tokio::net::UdpSocket;
 use tracing::{debug, trace};
 
@@ -24,22 +23,36 @@ pub trait IsakmpTransport {
         self.send(message).await?;
         self.receive(timeout).await
     }
-
-    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
 }
 
 pub struct UdpTransport<C> {
     socket: UdpSocket,
     codec: C,
-    received_hashes: Vec<Bytes>,
 }
 
-impl<C> UdpTransport<C> {
+impl<C: IsakmpMessageCodec> UdpTransport<C> {
     pub fn new(socket: UdpSocket, codec: C) -> Self {
-        Self {
-            socket,
-            codec,
-            received_hashes: Vec::new(),
+        Self { socket, codec }
+    }
+
+    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
+        debug!("Parsing ISAKMP message of size {}", data.len());
+        match self.codec.decode(data)? {
+            Some(msg) => {
+                if msg.exchange_type == ExchangeType::Informational {
+                    for payload in &msg.payloads {
+                        if let Payload::Notification(notify) = payload {
+                            if notify.message_type == 31 || notify.message_type == 9101 {
+                                return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
+                            } else if notify.message_type < 31 {
+                                return Err(anyhow!("IKE notify error {}", notify.message_type));
+                            }
+                        }
+                    }
+                }
+                Ok(Some(msg))
+            }
+            None => Ok(None),
         }
     }
 }
@@ -89,34 +102,5 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
         };
         trace!("Received message: {:#?}", received_message);
         Ok(received_message)
-    }
-
-    fn parse_data(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
-        let hash = self.codec.compute_hash(data);
-
-        if self.received_hashes.contains(&hash) {
-            trace!("Discarding already received message");
-            Ok(None)
-        } else {
-            self.received_hashes.push(hash);
-            debug!("Parsing ISAKMP message of size {}", data.len());
-            let mut reader = Cursor::new(&data);
-
-            let msg = self.codec.decode(&mut reader)?;
-
-            if msg.exchange_type == ExchangeType::Informational {
-                for payload in &msg.payloads {
-                    if let Payload::Notification(notify) = payload {
-                        if notify.message_type == 31 || notify.message_type == 9101 {
-                            return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
-                        } else if notify.message_type < 31 {
-                            return Err(anyhow!("IKE notify error {}", notify.message_type));
-                        }
-                    }
-                }
-            }
-
-            Ok(Some(msg))
-        }
     }
 }

@@ -1,5 +1,3 @@
-use std::io::Read;
-
 use bytes::Bytes;
 
 use crate::{
@@ -9,8 +7,8 @@ use crate::{
 
 pub trait IsakmpMessageCodec {
     fn encode(&mut self, message: &IsakmpMessage) -> Bytes;
-    fn decode<R: Read>(&mut self, reader: &mut R) -> anyhow::Result<IsakmpMessage>;
-    fn compute_hash(&self, data: &[u8]) -> Bytes;
+
+    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
 }
 
 #[derive(Debug, Clone)]
