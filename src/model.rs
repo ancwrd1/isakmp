@@ -261,6 +261,15 @@ impl EspAuthAlgorithm {
             EspAuthAlgorithm::Other(_) => 0,
         }
     }
+
+    pub fn hash_len(&self) -> usize {
+        match self {
+            EspAuthAlgorithm::HmacSha96 => 12,
+            EspAuthAlgorithm::HmacSha160 => 20,
+            EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 16,
+            EspAuthAlgorithm::Other(_) => 0,
+        }
+    }
 }
 
 impl From<u16> for EspAuthAlgorithm {
