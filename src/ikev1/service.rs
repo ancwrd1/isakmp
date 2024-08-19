@@ -14,6 +14,17 @@ use crate::{
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesPayload> {
+    response
+        .payloads
+        .into_iter()
+        .find_map(|p| match p {
+            Payload::Attributes(p) => Some(p),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("No config payload in response!"))
+}
+
 pub struct Ikev1Service<T> {
     socket_timeout: Duration,
     transport: T,
@@ -83,7 +94,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let proposal = Payload::Proposal(ProposalPayload {
             proposal_num: 1,
             protocol_id: ProtocolId::Isakmp,
-            spi: Default::default(),
+            spi: Bytes::default(),
             transforms,
         });
 
@@ -274,7 +285,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             }));
             payloads.push(Payload::CertificateRequest(CertificatePayload {
                 certificate_type: CertificateType::X509ForSignature,
-                data: Default::default(),
+                data: Bytes::default(),
             }));
         }
 
@@ -445,10 +456,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let mut buf = BytesMut::new();
         for (i, payload) in payloads.iter().enumerate() {
             let data = payload.to_bytes();
-            let next_payload = payloads
-                .get(i + 1)
-                .map(|p| p.as_payload_type())
-                .unwrap_or(PayloadType::None);
+            let next_payload = payloads.get(i + 1).map_or(PayloadType::None, |p| p.as_payload_type());
             buf.put_u8(next_payload.into());
             buf.put_u8(0);
             buf.put_u16(4 + data.len() as u16);
@@ -570,17 +578,6 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok(())
     }
 
-    fn get_attributes_payload(&mut self, response: IsakmpMessage) -> anyhow::Result<AttributesPayload> {
-        response
-            .payloads
-            .into_iter()
-            .find_map(|p| match p {
-                Payload::Attributes(p) => Some(p),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("No config payload in response!"))
-    }
-
     pub async fn get_auth_attributes(&mut self) -> anyhow::Result<(AttributesPayload, u32)> {
         debug!("Waiting for attributes payload");
 
@@ -590,7 +587,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         debug!("Attributes message ID: {:04x}", message_id);
 
-        Ok((self.get_attributes_payload(attr_response)?, message_id))
+        Ok((get_attributes_payload(attr_response)?, message_id))
     }
 
     pub async fn do_identity_protection<P, I>(
@@ -695,7 +692,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         let message_id = response.message_id;
         debug!("Message ID: {:04x}", message_id);
 
-        let config = self.get_attributes_payload(response)?;
+        let config = get_attributes_payload(response)?;
 
         debug!("Response message ID: {:04x}", message_id);
 
@@ -718,7 +715,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         debug!("End sending OM request");
 
-        self.get_attributes_payload(response)
+        get_attributes_payload(response)
     }
 
     pub async fn do_esp_proposal(

@@ -75,8 +75,7 @@ impl PayloadLike for SecurityAssociationPayload {
             buf.put_u8(
                 self.payloads
                     .get(i + 1)
-                    .map(|p| p.as_payload_type())
-                    .unwrap_or(PayloadType::None)
+                    .map_or(PayloadType::None, |p| p.as_payload_type())
                     .into(),
             );
             buf.put_u8(0);
@@ -91,16 +90,8 @@ impl PayloadLike for SecurityAssociationPayload {
             .situation
             .as_ref()
             .map(|s| {
-                let secrecy_len = s
-                    .secrecy
-                    .as_ref()
-                    .map(|s| 8 + s.level.len() + s.category.len())
-                    .unwrap_or(0);
-                let integrity_len = s
-                    .integrity
-                    .as_ref()
-                    .map(|s| 8 + s.level.len() + s.category.len())
-                    .unwrap_or(0);
+                let secrecy_len = s.secrecy.as_ref().map_or(0, |s| 8 + s.level.len() + s.category.len());
+                let integrity_len = s.integrity.as_ref().map_or(0, |s| 8 + s.level.len() + s.category.len());
                 secrecy_len + integrity_len
             })
             .unwrap_or(0);
@@ -184,8 +175,7 @@ impl PayloadLike for ProposalPayload {
             buf.put_u8(
                 self.transforms
                     .get(i + 1)
-                    .map(|_| PayloadType::Transform)
-                    .unwrap_or(PayloadType::None)
+                    .map_or(PayloadType::None, |_| PayloadType::Transform)
                     .into(),
             );
             buf.put_u8(0);
@@ -217,15 +207,15 @@ impl PayloadLike for ProposalPayload {
             })
             .collect::<Vec<_>>();
 
-        if transforms.len() != num_transforms {
-            Err(anyhow!("Invalid transforms payload"))
-        } else {
+        if transforms.len() == num_transforms {
             Ok(Self {
                 proposal_num,
                 protocol_id,
                 spi: spi_data.into(),
                 transforms,
             })
+        } else {
+            Err(anyhow!("Invalid transforms payload"))
         }
     }
 }

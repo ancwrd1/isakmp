@@ -24,9 +24,6 @@ pub struct IsakmpMessage {
 
 impl IsakmpMessage {
     pub fn next_payload(&self, index: usize) -> u8 {
-        self.payloads
-            .get(index)
-            .map(|p| p.as_payload_type().into())
-            .unwrap_or(0u8)
+        self.payloads.get(index).map_or(0, |p| p.as_payload_type().into())
     }
 }

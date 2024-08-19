@@ -35,7 +35,7 @@ const CCC_ID: &[u8] = b"(\n\
                :selected_realm_id (vpn_Azure_Authentication))";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
-    static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*"#).unwrap());
+    static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
 
     let tcp = TcpListener::bind("127.0.0.1:7779").await?;
     let (mut stream, _) = tcp.accept().await?;
@@ -100,9 +100,8 @@ async fn do_challenge_attr(
         let _ = tx.send(challenge.trim().to_owned()).await;
     }
 
-    let password = match tokio::time::timeout(Duration::from_secs(120), rx.recv()).await {
-        Ok(Some(password)) => password,
-        _ => return Err(anyhow!("Timeout while acquiring password!")),
+    let Ok(Some(password)) = tokio::time::timeout(Duration::from_secs(120), rx.recv()).await else {
+        return Err(anyhow!("Timeout while acquiring password!"));
     };
 
     Ok(ikev1
@@ -204,9 +203,8 @@ async fn main() -> anyhow::Result<()> {
     let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
     udp.connect(format!("{address}:500")).await?;
 
-    let gateway_addr = match udp.peer_addr()?.ip() {
-        IpAddr::V4(v4) => v4,
-        _ => return Err(anyhow!("Not an IPv4 addres")),
+    let IpAddr::V4(gateway_addr) = udp.peer_addr()?.ip() else {
+        return Err(anyhow!("Not an IPv4 addres"));
     };
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
@@ -228,7 +226,7 @@ async fn main() -> anyhow::Result<()> {
         })
         .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
 
-    println!("IKE lifetime: {}", lifetime);
+    println!("IKE lifetime: {lifetime}");
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
@@ -241,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
 
         let status = loop {
             auth_attrs = handle_auth_reply(&mut service, auth_attrs, message_id).await?;
-            println!("{:#?}", auth_attrs);
+            println!("{auth_attrs:#?}");
             let status = auth_attrs
                 .attributes
                 .iter()
@@ -265,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
 
     let om_reply = service.send_om_request().await?;
 
-    println!("{:#?}", om_reply);
+    println!("{om_reply:#?}");
 
     let ccc_session = get_attribute(&om_reply, ConfigAttributeType::CccSessionId)
         .into_iter()
@@ -303,7 +301,7 @@ async fn main() -> anyhow::Result<()> {
 
     let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;
 
-    println!("{:#?}", attributes);
+    println!("{attributes:#?}");
 
     let lifetime = attributes
         .iter()
@@ -316,12 +314,12 @@ async fn main() -> anyhow::Result<()> {
         })
         .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
 
-    println!("CCC session: {}", ccc_session);
-    println!("Lifetime:    {}", lifetime);
-    println!("IPv4:        {}", ipv4addr);
-    println!("Netmask:     {}", netmask);
-    println!("DNS:         {:?}", dns);
-    println!("Domains:     {}", search_domains);
+    println!("CCC session: {ccc_session}");
+    println!("Lifetime:    {lifetime}");
+    println!("IPv4:        {ipv4addr}");
+    println!("Netmask:     {netmask}");
+    println!("DNS:         {dns:?}");
+    println!("Domains:     {search_domains}");
 
     service.delete_sa().await?;
 
@@ -339,10 +337,10 @@ mod util {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Err(anyhow!(if !stderr.is_empty() {
-                stderr
-            } else {
+            Err(anyhow!(if stderr.is_empty() {
                 output.status.to_string()
+            } else {
+                stderr
             }))
         }
     }

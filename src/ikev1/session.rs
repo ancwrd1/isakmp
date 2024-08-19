@@ -148,13 +148,13 @@ impl Ikev1SessionImpl {
                 nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
                 ..Default::default()
             }),
-            responder: Default::default(),
-            session_keys: Default::default(),
-            iv: Default::default(),
-            sa_bytes: Default::default(),
+            responder: Arc::default(),
+            session_keys: Arc::default(),
+            iv: HashMap::default(),
+            sa_bytes: Bytes::default(),
             received_hashes: Vec::new(),
-            esp_in: Default::default(),
-            esp_out: Default::default(),
+            esp_in: Arc::default(),
+            esp_out: Arc::default(),
         })
     }
 
@@ -191,8 +191,8 @@ impl Ikev1SessionImpl {
             sk_e,
             sk_a,
             transform_id,
-            auth_algorithm,
             key_length,
+            auth_algorithm,
         })
     }
 
@@ -388,11 +388,11 @@ impl IsakmpSession for Ikev1SessionImpl {
 
     fn validate_message_hash(&mut self, data: &[u8]) -> bool {
         let hash = self.hash([data]).expect("Hash computation should not fail");
-        if !self.received_hashes.contains(&hash) {
+        if self.received_hashes.contains(&hash) {
+            false
+        } else {
             self.received_hashes.push(hash);
             true
-        } else {
-            false
         }
     }
 

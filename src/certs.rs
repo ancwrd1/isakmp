@@ -37,7 +37,7 @@ pub trait ClientCertificate {
 }
 
 fn format_x509_name(name: &X509NameRef) -> String {
-    name.entries().map(|e| format!("{:?}", e)).collect::<Vec<_>>().join(",")
+    name.entries().map(|e| format!("{e:?}")).collect::<Vec<_>>().join(",")
 }
 
 pub struct CertList(Vec<X509>);
@@ -298,7 +298,7 @@ impl ClientCertificate for Pkcs11Certificate {
 
         if always_auth {
             debug!("Authenticating for additional context");
-            let user_pin = AuthPin::new(self.pin.to_owned());
+            let user_pin = AuthPin::new(self.pin.clone());
             session.login(UserType::ContextSpecific, Some(&user_pin))?;
         }
 

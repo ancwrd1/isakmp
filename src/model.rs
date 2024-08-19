@@ -12,16 +12,16 @@ bitflags! {
     /// Represents a set of flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct IsakmpFlags: u8 {
-        const ENCRYPTION = 0b00000001;
-        const COMMIT = 0b00000010;
-        const AUTHENTICATION = 0b00000100;
+        const ENCRYPTION = 0b0000_0001;
+        const COMMIT = 0b0000_0010;
+        const AUTHENTICATION = 0b0000_0100;
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct SituationFlags: u32 {
-        const IDENTITY_ONLY = 0b00000001;
-        const SECRECY = 0b00000010;
-        const INTEGRITY = 0b00000100;
+        const IDENTITY_ONLY = 0b0000_0001;
+        const SECRECY = 0b0000_0010;
+        const INTEGRITY = 0b0000_0100;
     }
 }
 
@@ -256,19 +256,8 @@ pub enum EspAuthAlgorithm {
 impl EspAuthAlgorithm {
     pub fn key_len(&self) -> usize {
         match self {
-            EspAuthAlgorithm::HmacSha96 => 20,
-            EspAuthAlgorithm::HmacSha160 => 20,
-            EspAuthAlgorithm::HmacSha256 => 32,
-            EspAuthAlgorithm::HmacSha256v2 => 32,
-            EspAuthAlgorithm::Other(_) => 0,
-        }
-    }
-    pub fn hash_len(&self) -> usize {
-        match self {
-            EspAuthAlgorithm::HmacSha96 => 12,
-            EspAuthAlgorithm::HmacSha160 => 20,
-            EspAuthAlgorithm::HmacSha256 => 16,
-            EspAuthAlgorithm::HmacSha256v2 => 16,
+            EspAuthAlgorithm::HmacSha96 | EspAuthAlgorithm::HmacSha160 => 20,
+            EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 32,
             EspAuthAlgorithm::Other(_) => 0,
         }
     }

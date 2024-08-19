@@ -10,5 +10,5 @@ const DATA: &[u8] = include_bytes!("mm.bin");
 fn test_parse_main_mode() {
     let session = Ikev1Session::new(Identity::None).unwrap();
     let msg = Ikev1Codec::new(session).decode(DATA).unwrap();
-    println!("{:#?}", msg);
+    println!("{msg:#?}");
 }
