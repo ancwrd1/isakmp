@@ -635,10 +635,10 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     debug!("IP address from ID payload: {}", id_addr);
 
                     if id_addr != gateway_addr {
-                        return Err(anyhow!(
-                            "Mismatched IP address in the ID payload, expected: {}",
-                            gateway_addr
-                        ));
+                        warn!(
+                            "Mismatched IP address in the ID payload: {}, expected: {}",
+                            id_addr, gateway_addr
+                        );
                     }
                 } else {
                     warn!("Unknown ID payload type: {:?}", id_type);
