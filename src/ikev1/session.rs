@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
@@ -11,7 +11,6 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 
 #[derive(Clone)]
 pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
@@ -21,18 +20,15 @@ impl Ikev1Session {
         Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(identity)?))))
     }
 
-    pub fn load<P>(&mut self, path: P) -> anyhow::Result<()>
+    pub fn load<T>(&mut self, data: T) -> anyhow::Result<()>
     where
-        P: AsRef<Path>,
+        T: AsRef<[u8]>,
     {
-        self.0.write().load(path)
+        self.0.write().load(data)
     }
 
-    pub fn save<P>(&self, path: P) -> anyhow::Result<()>
-    where
-        P: AsRef<Path>,
-    {
-        self.0.write().save(path)
+    pub fn save(&self) -> anyhow::Result<Vec<u8>> {
+        self.0.write().save()
     }
 }
 
@@ -183,14 +179,11 @@ impl Ikev1SessionImpl {
         })
     }
 
-    fn load<P>(&mut self, path: P) -> anyhow::Result<()>
+    fn load<T>(&mut self, data: T) -> anyhow::Result<()>
     where
-        P: AsRef<Path>,
+        T: AsRef<[u8]>,
     {
-        let data = std::fs::read(&path)?;
-        let store = rmp_serde::from_slice::<Ikev1SessionStore>(&data)?;
-
-        debug!("Loaded IKEv1 session from {}", path.as_ref().display());
+        let store = rmp_serde::from_slice::<Ikev1SessionStore>(data.as_ref())?;
 
         self.initiator = store.initiator;
         self.responder = store.responder;
@@ -202,10 +195,7 @@ impl Ikev1SessionImpl {
         Ok(())
     }
 
-    fn save<P>(&self, path: P) -> anyhow::Result<()>
-    where
-        P: AsRef<Path>,
-    {
+    fn save(&self) -> anyhow::Result<Vec<u8>> {
         let store = Ikev1SessionStore {
             initiator: self.initiator.clone(),
             responder: self.responder.clone(),
@@ -215,12 +205,7 @@ impl Ikev1SessionImpl {
             received_hashes: self.received_hashes.clone(),
         };
 
-        let data = rmp_serde::to_vec(&store)?;
-        std::fs::write(&path, data)?;
-
-        debug!("Stored IKEv1 session to {}", path.as_ref().display());
-
-        Ok(())
+        Ok(rmp_serde::to_vec(&store)?)
     }
 
     fn gen_esp_material(
