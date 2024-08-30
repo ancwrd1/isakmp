@@ -321,6 +321,21 @@ async fn main() -> anyhow::Result<()> {
     println!("DNS:         {dns:?}");
     println!("Domains:     {search_domains}");
 
+    service.session().save("/tmp/session.ike")?;
+    drop(service);
+
+    let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    udp.connect(format!("{address}:500")).await?;
+
+    let mut session = Ikev1Session::new(identity.clone())?;
+    session.load("/tmp/session.ike")?;
+    let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
+    let mut service = Ikev1Service::new(transport, session)?;
+
+    let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;
+
+    println!("{attributes:#?}");
+
     service.delete_sa().await?;
 
     Ok(())

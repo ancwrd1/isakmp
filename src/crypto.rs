@@ -119,10 +119,6 @@ impl Crypto {
         self.dh2.public_key().to_vec().into()
     }
 
-    pub fn private_key(&self) -> Bytes {
-        self.dh2.private_key().to_vec().into()
-    }
-
     pub fn shared_secret(&self, public_key: &[u8]) -> anyhow::Result<Bytes> {
         let bn = BigNum::from_slice(public_key)?;
         Ok(self.dh2.compute_key(&bn)?.into())

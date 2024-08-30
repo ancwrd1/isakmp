@@ -6,7 +6,7 @@ authors = ["Dmitry Pankratov <dmitry@pankratov.net>"]
 
 [dependencies]
 bitflags = "2"
-bytes = "1"
+bytes = { version = "1", features = ["serde"] }
 anyhow = "1"
 byteorder = "1"
 rand = "0.8"
@@ -19,6 +19,8 @@ parking_lot = "0.12"
 tracing = "0.1"
 itertools = "0.13"
 cryptoki = "0.7"
+serde = { version = "1.0.208", features = ["rc", "derive"] }
+rmp-serde = "1"
 
 [dev-dependencies]
 opener = "0.7"

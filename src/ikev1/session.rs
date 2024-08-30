@@ -1,9 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
-
-use anyhow::anyhow;
-use bytes::Bytes;
-use parking_lot::RwLock;
-use rand::random;
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::{
     certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
@@ -11,6 +6,12 @@ use crate::{
     model::*,
     session::{EndpointData, IsakmpSession, SessionKeys},
 };
+use anyhow::anyhow;
+use bytes::Bytes;
+use parking_lot::RwLock;
+use rand::random;
+use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
@@ -18,6 +19,20 @@ pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
 impl Ikev1Session {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
         Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(identity)?))))
+    }
+
+    pub fn load<P>(&mut self, path: P) -> anyhow::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        self.0.write().load(path)
+    }
+
+    pub fn save<P>(&self, path: P) -> anyhow::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        self.0.write().save(path)
     }
 }
 
@@ -112,6 +127,16 @@ impl IsakmpSession for Ikev1Session {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct Ikev1SessionStore {
+    initiator: Arc<EndpointData>,
+    responder: Arc<EndpointData>,
+    session_keys: Arc<SessionKeys>,
+    iv: HashMap<u32, Bytes>,
+    sa_bytes: Bytes,
+    received_hashes: Vec<Bytes>,
+}
+
 struct Ikev1SessionImpl {
     crypto: Crypto,
     client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
@@ -156,6 +181,46 @@ impl Ikev1SessionImpl {
             esp_in: Arc::default(),
             esp_out: Arc::default(),
         })
+    }
+
+    fn load<P>(&mut self, path: P) -> anyhow::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        let data = std::fs::read(&path)?;
+        let store = rmp_serde::from_slice::<Ikev1SessionStore>(&data)?;
+
+        debug!("Loaded IKEv1 session from {}", path.as_ref().display());
+
+        self.initiator = store.initiator;
+        self.responder = store.responder;
+        self.session_keys = store.session_keys;
+        self.iv = store.iv;
+        self.sa_bytes = store.sa_bytes;
+        self.received_hashes = store.received_hashes;
+
+        Ok(())
+    }
+
+    fn save<P>(&self, path: P) -> anyhow::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        let store = Ikev1SessionStore {
+            initiator: self.initiator.clone(),
+            responder: self.responder.clone(),
+            session_keys: self.session_keys.clone(),
+            iv: self.iv.clone(),
+            sa_bytes: self.sa_bytes.clone(),
+            received_hashes: self.received_hashes.clone(),
+        };
+
+        let data = rmp_serde::to_vec(&store)?;
+        std::fs::write(&path, data)?;
+
+        debug!("Stored IKEv1 session to {}", path.as_ref().display());
+
+        Ok(())
     }
 
     fn gen_esp_material(
