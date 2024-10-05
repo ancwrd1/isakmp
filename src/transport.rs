@@ -44,22 +44,17 @@ pub struct UdpTransport<C> {
     socket: UdpSocket,
     codec: C,
     receive_buffer: Vec<u8>,
+    message_offset: usize,
 }
 
 impl<C: IsakmpMessageCodec> UdpTransport<C> {
     pub fn new(socket: UdpSocket, codec: C) -> Self {
+        let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
         Self {
             socket,
             codec,
             receive_buffer: vec![0u8; 65536],
-        }
-    }
-
-    fn message_offset(&self) -> anyhow::Result<usize> {
-        if self.socket.peer_addr()?.port() == NATT_PORT {
-            Ok(4)
-        } else {
-            Ok(0)
+            message_offset: if port == NATT_PORT { 4 } else { 0 },
         }
     }
 }
@@ -76,7 +71,7 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
 
         trace!("Sending ISAKMP message: {:#?}", message);
 
-        if self.message_offset()? == 4 {
+        if self.message_offset == 4 {
             let mut send_buffer = vec![0u8, 0, 0, 0];
             send_buffer.extend(&data);
             self.socket.send(&send_buffer).await?;
@@ -93,7 +88,7 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
 
             debug!("Received ISAKMP message, len: {}", len);
 
-            match self.codec.decode(&self.receive_buffer[self.message_offset()?..len])? {
+            match self.codec.decode(&self.receive_buffer[self.message_offset..len])? {
                 Some(msg) => {
                     check_informational(&msg)?;
                     break msg;
