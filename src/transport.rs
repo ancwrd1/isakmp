@@ -71,8 +71,8 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
 
         trace!("Sending ISAKMP message: {:#?}", message);
 
-        if self.message_offset == 4 {
-            let mut send_buffer = vec![0u8, 0, 0, 0];
+        if self.message_offset > 0 {
+            let mut send_buffer = vec![0u8; self.message_offset];
             send_buffer.extend(&data);
             self.socket.send(&send_buffer).await?;
         } else {
