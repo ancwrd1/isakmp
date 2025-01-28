@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
 use once_cell::sync::Lazy;
@@ -165,7 +165,7 @@ async fn handle_auth_reply(
 async fn main() -> anyhow::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
 
-    let address = args.get(1).ok_or_else(|| anyhow!("Missing required server address"))?;
+    let address = args.get(1).context("Missing required server address")?;
 
     let identity = match args.get(2).map(|s| s.as_str()) {
         Some("pkcs12") => match args.get(3) {
@@ -224,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
             }),
             _ => None,
         })
-        .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
+        .context("No lifetime in reply!")?;
 
     println!("IKE lifetime: {lifetime}");
 
@@ -269,12 +269,12 @@ async fn main() -> anyhow::Result<()> {
         .into_iter()
         .next()
         .map(|v| String::from_utf8_lossy(&v).trim_matches('\0').to_string())
-        .ok_or_else(|| anyhow!("No session in reply!"))?;
+        .context("No session in reply!")?;
 
     let ipv4addr: Ipv4Addr = get_attribute(&om_reply, ConfigAttributeType::Ipv4Address)
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("No IPv4 in reply!"))?
+        .context("No IPv4 in reply!")?
         .reader()
         .read_u32::<BigEndian>()?
         .into();
@@ -282,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
     let netmask: Ipv4Addr = get_attribute(&om_reply, ConfigAttributeType::Ipv4Netmask)
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("No netmask in reply!"))?
+        .context("No netmask in reply!")?
         .reader()
         .read_u32::<BigEndian>()?
         .into();
@@ -312,7 +312,7 @@ async fn main() -> anyhow::Result<()> {
             }),
             _ => None,
         })
-        .ok_or_else(|| anyhow!("No lifetime in reply!"))?;
+        .context("No lifetime in reply!")?;
 
     println!("CCC session: {ccc_session}");
     println!("Lifetime:    {lifetime}");

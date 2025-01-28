@@ -1,6 +1,6 @@
 use std::{net::Ipv4Addr, path::Path, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::iproduct;
@@ -22,7 +22,7 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
             Payload::Attributes(p) => Some(p),
             _ => None,
         })
-        .ok_or_else(|| anyhow!("No config payload in response!"))
+        .context("No config payload in response!")
 }
 
 pub struct Ikev1Service<T> {
@@ -490,7 +490,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 }),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No attributes in response!"))?;
+            .context("No attributes in response!")?;
 
         let hash_alg: IkeHashAlgorithm = attributes
             .iter()
@@ -501,7 +501,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No hash algorithm in response!"))?;
+            .context("No hash algorithm in response!")?;
 
         debug!("Negotiated SA hash algorithm: {:?}", hash_alg);
 
@@ -514,7 +514,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No key length in response!"))?;
+            .context("No key length in response!")?;
 
         debug!("Negotiated SA key length: {}", key_len);
 
@@ -527,7 +527,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No DH group in response!"))?;
+            .context("No DH group in response!")?;
 
         debug!("Negotiated SA group: {:?}", group);
 
@@ -553,7 +553,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 Payload::KeyExchange(ke) => Some(ke.data.clone()),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No KE in response!"))?;
+            .context("No KE in response!")?;
 
         trace!("Responder's public key length: {}", public_key_r.len());
 
@@ -564,7 +564,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 Payload::Nonce(ke) => Some(ke.data.clone()),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No nonce in response!"))?;
+            .context("No nonce in response!")?;
 
         trace!("Responder's nonce length: {}", nonce_r.len());
 
@@ -739,7 +739,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 Payload::Nonce(payload) => Some(payload.data.clone()),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No nonce payload in response!"))?;
+            .context("No nonce payload in response!")?;
 
         let spi_r = response
             .payloads
@@ -751,7 +751,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 }),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No proposal payload in response!"))?;
+            .context("No proposal payload in response!")?;
 
         let (transform_id, attributes) = response
             .payloads
@@ -767,7 +767,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 }),
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("No attributes in response!"))?;
+            .context("No attributes in response!")?;
 
         debug!("Negotiated transform id: {:?}", transform_id);
 
@@ -785,7 +785,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                     None
                 }
             })
-            .ok_or_else(|| anyhow!("No auth algorithm in response!"))?;
+            .context("No auth algorithm in response!")?;
 
         debug!("Negotiated ESP auth algorithm: {:?}", auth_alg);
 

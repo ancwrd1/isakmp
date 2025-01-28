@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use openssl::{
     bn::BigNum,
@@ -190,6 +190,6 @@ impl Crypto {
 
         (&buf[..len] == hash)
             .then_some(())
-            .ok_or_else(|| anyhow!("Signature verification failed!"))
+            .context("Signature verification failed!")
     }
 }

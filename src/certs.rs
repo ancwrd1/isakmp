@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use cryptoki::{
     context::{CInitializeArgs, Pkcs11},
@@ -198,7 +198,7 @@ impl Pkcs11Certificate {
         let slots = pkcs11.get_slots_with_token()?;
 
         debug!("Total slots: {}", slots.len());
-        let slot = slots.into_iter().next().ok_or_else(|| anyhow!("No slots found"))?;
+        let slot = slots.into_iter().next().context("No slots found")?;
 
         let user_pin = AuthPin::new(pin.to_owned());
 
@@ -286,7 +286,7 @@ impl ClientCertificate for Pkcs11Certificate {
             .find_objects(&priv_key_template)?
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow!("No private key!"))?;
+            .context("No private key!")?;
 
         let always_auth = matches!(
             session
