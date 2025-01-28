@@ -1,8 +1,13 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use tokio::net::UdpSocket;
+use bytes::Bytes;
+use tokio::{
+    net::UdpSocket,
+    sync::mpsc::{channel, Receiver},
+};
 use tracing::{debug, trace};
 
 use crate::{
@@ -41,20 +46,38 @@ pub trait IsakmpTransport {
 }
 
 pub struct UdpTransport<C> {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     codec: C,
-    receive_buffer: Vec<u8>,
     message_offset: usize,
+    receiver: Receiver<Bytes>,
 }
 
 impl<C: IsakmpMessageCodec> UdpTransport<C> {
     pub fn new(socket: UdpSocket, codec: C) -> Self {
         let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
+        let (tx, rx) = channel(1024);
+
+        let message_offset = if port == NATT_PORT { 4 } else { 0 };
+
+        let socket = Arc::new(socket);
+        let socket2 = socket.clone();
+
+        tokio::spawn(async move {
+            let mut receive_buffer = vec![0u8; 65536];
+
+            while let Ok((len, _)) = socket2.recv_from(&mut receive_buffer).await {
+                let data = receive_buffer[message_offset..len].to_vec().into();
+                debug!("Received ISAKMP message, len: {}", len);
+                tx.send(data).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+
         Self {
             socket,
             codec,
-            receive_buffer: vec![0u8; 65536],
-            message_offset: if port == NATT_PORT { 4 } else { 0 },
+            message_offset,
+            receiver: rx,
         }
     }
 }
@@ -84,11 +107,11 @@ impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
         let received_message = loop {
-            let (len, _) = tokio::time::timeout(timeout, self.socket.recv_from(&mut self.receive_buffer)).await??;
+            let data = tokio::time::timeout(timeout, self.receiver.recv())
+                .await?
+                .context("Receive error")?;
 
-            debug!("Received ISAKMP message, len: {}", len);
-
-            match self.codec.decode(&self.receive_buffer[self.message_offset..len])? {
+            match self.codec.decode(&data)? {
                 Some(msg) => {
                     check_informational(&msg)?;
                     break msg;
