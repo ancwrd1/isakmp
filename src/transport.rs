@@ -55,7 +55,7 @@ pub struct UdpTransport<C> {
 impl<C: IsakmpMessageCodec> UdpTransport<C> {
     pub fn new(socket: UdpSocket, codec: C) -> Self {
         let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
-        let (tx, rx) = channel(1024);
+        let (tx, rx) = channel(16);
 
         let message_offset = if port == NATT_PORT { 4 } else { 0 };
 

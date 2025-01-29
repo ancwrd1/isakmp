@@ -17,6 +17,7 @@ use tokio::{
 };
 use tracing_subscriber::EnvFilter;
 
+use isakmp::model::IdentityRequest;
 use isakmp::{
     ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
@@ -230,13 +231,14 @@ async fn main() -> anyhow::Result<()> {
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
-    service
-        .do_identity_protection::<PathBuf, _>(gateway_addr, Bytes::from_static(CCC_ID), verify_certs, ca_certs)
-        .await?;
+    let identity_request = IdentityRequest {
+        auth_blob: Bytes::from_static(CCC_ID),
+        verify_certs,
+        ca_certs,
+        with_mfa: matches!(identity, Identity::None),
+    };
 
-    if matches!(identity, Identity::None) {
-        let (mut auth_attrs, message_id) = service.get_auth_attributes().await?;
-
+    if let Some((mut auth_attrs, message_id)) = service.do_identity_protection(identity_request).await? {
         let status = loop {
             auth_attrs = handle_auth_reply(&mut service, auth_attrs, message_id).await?;
             println!("{auth_attrs:#?}");

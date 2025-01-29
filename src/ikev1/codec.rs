@@ -72,7 +72,7 @@ impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
     }
 
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
-        if !self.session.validate_message_hash(data) {
+        if !self.session.validate_message(data) {
             trace!("Discarding duplicate message");
             return Ok(None);
         }

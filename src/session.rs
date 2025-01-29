@@ -53,7 +53,7 @@ pub trait IsakmpSession {
 
     fn cipher_block_size(&self) -> usize;
 
-    fn validate_message_hash(&mut self, data: &[u8]) -> bool;
+    fn validate_message(&mut self, data: &[u8]) -> bool;
 
     fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
     where

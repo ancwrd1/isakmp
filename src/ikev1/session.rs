@@ -66,8 +66,8 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().cipher_block_size()
     }
 
-    fn validate_message_hash(&mut self, data: &[u8]) -> bool {
-        self.0.write().validate_message_hash(data)
+    fn validate_message(&mut self, data: &[u8]) -> bool {
+        self.0.write().validate_message(data)
     }
 
     fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
@@ -436,7 +436,7 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.crypto.block_size()
     }
 
-    fn validate_message_hash(&mut self, data: &[u8]) -> bool {
+    fn validate_message(&mut self, data: &[u8]) -> bool {
         let hash = self.hash([data]).expect("Hash computation should not fail");
         if self.received_hashes.contains(&hash) {
             false

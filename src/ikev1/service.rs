@@ -1,11 +1,11 @@
-use std::{net::Ipv4Addr, path::Path, time::Duration};
+use std::{net::Ipv4Addr, time::Duration};
 
 use anyhow::{anyhow, Context};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::iproduct;
 use rand::random;
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 
 use crate::{
     certs::CertList, ikev1::session::Ikev1Session, message::IsakmpMessage, model::*, payload::*,
@@ -109,8 +109,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             Payload::VendorId(CHECKPOINT_VID.into()),
             Payload::VendorId(NATT_VID.into()),
             Payload::VendorId(EXT_VID_WITH_FLAGS.into()),
-            // TODO: add fragmentation support
-            //Payload::VendorId(FRAGMENTATION_VID.into()),
+            Payload::VendorId(FRAGMENTATION_VID.into()),
         ];
 
         Ok(IsakmpMessage {
@@ -583,9 +582,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok(())
     }
 
-    pub async fn get_auth_attributes(&mut self) -> anyhow::Result<(AttributesPayload, u32)> {
-        debug!("Waiting for attributes payload");
-
+    async fn get_auth_attributes(&mut self) -> anyhow::Result<(AttributesPayload, u32)> {
         let attr_response = self.transport.receive(self.socket_timeout).await?;
 
         let message_id = attr_response.message_id;
@@ -595,20 +592,13 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
         Ok((get_attributes_payload(attr_response)?, message_id))
     }
 
-    pub async fn do_identity_protection<P, I>(
+    pub async fn do_identity_protection(
         &mut self,
-        gateway_addr: Ipv4Addr,
-        auth_data: Bytes,
-        verify_certs: bool,
-        ca_certs: I,
-    ) -> anyhow::Result<()>
-    where
-        I: IntoIterator<Item = P>,
-        P: AsRef<Path>,
-    {
+        identity_request: IdentityRequest,
+    ) -> anyhow::Result<Option<(AttributesPayload, u32)>> {
         debug!("Begin identity protection");
 
-        let request = self.build_id_protection(auth_data)?;
+        let request = self.build_id_protection(identity_request.auth_blob)?;
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
@@ -636,17 +626,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
                 let id_type = IdentityType::from(id.id_type);
                 if id_type == IdentityType::Ipv4Address {
                     let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
-
                     debug!("IP address from ID payload: {}", id_addr);
-
-                    if id_addr != gateway_addr {
-                        warn!(
-                            "Mismatched IP address in the ID payload: {}, expected: {}",
-                            id_addr, gateway_addr
-                        );
-                    }
-                } else {
-                    warn!("Unknown ID payload type: {:?}", id_type);
                 }
 
                 let data = id.to_bytes();
@@ -660,11 +640,11 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             }
         }
 
-        if verify_certs {
+        if identity_request.verify_certs {
             let mut ca_cert_vec = Vec::new();
 
-            for cert in ca_certs {
-                let data = std::fs::read(cert.as_ref())?;
+            for cert in &identity_request.ca_certs {
+                let data = std::fs::read(cert)?;
                 ca_cert_vec.push(data.into());
             }
             let cert_list = CertList::from_ipsec(&certs)?;
@@ -672,7 +652,16 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             cert_list.verify(&ca_cert_vec)?;
         }
 
-        Ok(())
+        let result = if identity_request.with_mfa {
+            debug!("Awaiting authentication factors");
+            Ok(Some(self.get_auth_attributes().await?))
+        } else {
+            Ok(None)
+        };
+
+        debug!("End identity protection");
+
+        result
     }
 
     pub async fn send_auth_attribute(

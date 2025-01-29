@@ -929,3 +929,11 @@ pub struct EspProposal {
     pub auth_alg: EspAuthAlgorithm,
     pub key_len: usize,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct IdentityRequest {
+    pub auth_blob: Bytes,
+    pub verify_certs: bool,
+    pub ca_certs: Vec<PathBuf>,
+    pub with_mfa: bool,
+}
