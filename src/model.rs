@@ -4,9 +4,11 @@ use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
 
-pub const CHECKPOINT_VID: &[u8] = b"defb99e69a9f1f6e06f15006b1f166ae";
-pub const NATT_VID: &[u8] = b"4a131c81070358455c5728f20e95452f";
-pub const EXT_VID_WITH_FLAGS: &[u8] = b"3cf187b2474029ea46ac7fd0eaf289f500000001";
+pub const CHECKPOINT_VID: &[u8] = b"\xde\xfb\x99\xe6\x9a\x9f\x1f\x6e\x06\xf1\x50\x06\xb1\xf1\x66\xae";
+pub const FRAGMENTATION_VID: &[u8] = b"\x40\x48\xb7\xd5\x6e\xbc\xe8\x85\x25\xe7\xde\x7f\x00\xd6\xc2\xd3";
+pub const NATT_VID: &[u8] = b"\x4a\x13\x1c\x81\x07\x03\x58\x45\x5c\x57\x28\xf2\x0e\x95\x45\x2f";
+pub const EXT_VID_WITH_FLAGS: &[u8] =
+    b"\x3c\xf1\x87\xb2\x47\x40\x29\xea\x46\xac\x7f\xd0\xea\xf2\x89\xf5\x00\x00\x00\x03";
 
 bitflags! {
     /// Represents a set of flags.

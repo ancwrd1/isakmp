@@ -104,9 +104,14 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             payloads: vec![proposal],
         });
 
-        let vid1 = Payload::VendorId(hex::decode(CHECKPOINT_VID)?.into());
-        let vid2 = Payload::VendorId(hex::decode(NATT_VID)?.into());
-        let vid3 = Payload::VendorId(hex::decode(EXT_VID_WITH_FLAGS)?.into());
+        let payloads = vec![
+            sa,
+            Payload::VendorId(CHECKPOINT_VID.into()),
+            Payload::VendorId(NATT_VID.into()),
+            Payload::VendorId(EXT_VID_WITH_FLAGS.into()),
+            // TODO: add fragmentation support
+            //Payload::VendorId(FRAGMENTATION_VID.into()),
+        ];
 
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
@@ -115,7 +120,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
-            payloads: vec![sa, vid1, vid2, vid3],
+            payloads,
         })
     }
 
