@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use crate::ikev1::codec::Ikev1Codec;
+use crate::message::IsakmpMessageCodec;
 use crate::{
     certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
     crypto::{CipherType, Crypto, DigestType, GroupType},
@@ -109,6 +111,10 @@ impl IsakmpSession for Ikev1Session {
 
     fn save(&self) -> anyhow::Result<Vec<u8>> {
         self.0.write().save()
+    }
+
+    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
+        Box::new(Ikev1Codec::new(Box::new(self.clone())))
     }
 }
 
@@ -496,5 +502,9 @@ impl IsakmpSession for Ikev1SessionImpl {
         };
 
         Ok(rmp_serde::to_vec(&store)?)
+    }
+
+    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
+        panic!("Not implemented");
     }
 }

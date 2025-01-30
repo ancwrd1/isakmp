@@ -18,7 +18,7 @@ use tokio::{
 use tracing_subscriber::EnvFilter;
 
 use isakmp::{
-    ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
+    ikev1::{service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
     session::IsakmpSession,
@@ -209,7 +209,6 @@ async fn main() -> anyhow::Result<()> {
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
     let session = Ikev1Session::new(identity.clone())?;
-    //let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
 
     let socket_address = format!("{address}:443")
         .to_socket_addrs()?
@@ -218,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
 
     let transport = Box::new(isakmp::transport::TcptTransport::new(
         socket_address,
-        Box::new(Ikev1Codec::new(Box::new(session.clone()))),
+        session.new_codec(),
     ));
 
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
@@ -342,10 +341,7 @@ async fn main() -> anyhow::Result<()> {
     let mut session = Ikev1Session::new(identity.clone())?;
     session.load(&saved)?;
 
-    let transport = Box::new(UdpTransport::new(
-        udp,
-        Box::new(Ikev1Codec::new(Box::new(session.clone()))),
-    ));
+    let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
     let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;

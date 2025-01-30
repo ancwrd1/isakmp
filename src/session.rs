@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::message::IsakmpMessageCodec;
 use crate::{
     certs::ClientCertificate,
     model::{EspCryptMaterial, EspProposal, IkeGroupDescription, IkeHashAlgorithm},
@@ -80,4 +81,6 @@ pub trait IsakmpSession {
     fn load(&mut self, data: &[u8]) -> anyhow::Result<()>;
 
     fn save(&self) -> anyhow::Result<Vec<u8>>;
+
+    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
 }
