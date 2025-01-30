@@ -22,7 +22,7 @@ use isakmp::{
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
     session::IsakmpSession,
-    transport::UdpTransport,
+    transport::{TcptDataType, UdpTransport},
 };
 
 const CP_AUTH_BLOB: &[u8] = b"(\n\
@@ -216,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
         .context("No address")?;
 
     let transport = Box::new(isakmp::transport::TcptTransport::new(
+        TcptDataType::Ike,
         socket_address,
         session.new_codec(),
     ));

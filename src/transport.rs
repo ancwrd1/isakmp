@@ -7,7 +7,7 @@ use crate::{message::IsakmpMessage, model::ExchangeType, payload::Payload};
 mod tcpt;
 mod udp;
 
-pub use tcpt::TcptTransport;
+pub use tcpt::{TcptDataType, TcptTransport};
 pub use udp::UdpTransport;
 
 fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
