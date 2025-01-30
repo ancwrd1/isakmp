@@ -19,17 +19,6 @@ impl Ikev1Session {
     pub fn new(identity: Identity) -> anyhow::Result<Self> {
         Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(identity)?))))
     }
-
-    pub fn load<T>(&mut self, data: T) -> anyhow::Result<()>
-    where
-        T: AsRef<[u8]>,
-    {
-        self.0.write().load(data)
-    }
-
-    pub fn save(&self) -> anyhow::Result<Vec<u8>> {
-        self.0.write().save()
-    }
 }
 
 impl IsakmpSession for Ikev1Session {
@@ -113,6 +102,14 @@ impl IsakmpSession for Ikev1Session {
     fn session_keys(&self) -> Arc<SessionKeys> {
         self.0.read().session_keys()
     }
+
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        self.0.write().load(data)
+    }
+
+    fn save(&self) -> anyhow::Result<Vec<u8>> {
+        self.0.write().save()
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -169,35 +166,6 @@ impl Ikev1SessionImpl {
             esp_in: Arc::default(),
             esp_out: Arc::default(),
         })
-    }
-
-    fn load<T>(&mut self, data: T) -> anyhow::Result<()>
-    where
-        T: AsRef<[u8]>,
-    {
-        let store = rmp_serde::from_slice::<Ikev1SessionStore>(data.as_ref())?;
-
-        self.initiator = store.initiator;
-        self.responder = store.responder;
-        self.session_keys = store.session_keys;
-        self.iv = store.iv;
-        self.sa_bytes = store.sa_bytes;
-        self.received_hashes = store.received_hashes;
-
-        Ok(())
-    }
-
-    fn save(&self) -> anyhow::Result<Vec<u8>> {
-        let store = Ikev1SessionStore {
-            initiator: self.initiator.clone(),
-            responder: self.responder.clone(),
-            session_keys: self.session_keys.clone(),
-            iv: self.iv.clone(),
-            sa_bytes: self.sa_bytes.clone(),
-            received_hashes: self.received_hashes.clone(),
-        };
-
-        Ok(rmp_serde::to_vec(&store)?)
     }
 
     fn gen_esp_material(
@@ -502,5 +470,31 @@ impl IsakmpSession for Ikev1SessionImpl {
 
     fn session_keys(&self) -> Arc<SessionKeys> {
         self.session_keys.clone()
+    }
+
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<()> {
+        let store = rmp_serde::from_slice::<Ikev1SessionStore>(data)?;
+
+        self.initiator = store.initiator;
+        self.responder = store.responder;
+        self.session_keys = store.session_keys;
+        self.iv = store.iv;
+        self.sa_bytes = store.sa_bytes;
+        self.received_hashes = store.received_hashes;
+
+        Ok(())
+    }
+
+    fn save(&self) -> anyhow::Result<Vec<u8>> {
+        let store = Ikev1SessionStore {
+            initiator: self.initiator.clone(),
+            responder: self.responder.clone(),
+            session_keys: self.session_keys.clone(),
+            iv: self.iv.clone(),
+            sa_bytes: self.sa_bytes.clone(),
+            received_hashes: self.received_hashes.clone(),
+        };
+
+        Ok(rmp_serde::to_vec(&store)?)
     }
 }

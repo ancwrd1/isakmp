@@ -21,6 +21,7 @@ use isakmp::{
     ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
+    session::IsakmpSession,
     transport::UdpTransport,
 };
 
@@ -220,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
         Box::new(Ikev1Codec::new(Box::new(session.clone()))),
     ));
 
-    let mut service = Ikev1Service::new(transport, session)?;
+    let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
     let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
@@ -345,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
         udp,
         Box::new(Ikev1Codec::new(Box::new(session.clone()))),
     ));
-    let mut service = Ikev1Service::new(transport, session)?;
+    let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
     let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;
 

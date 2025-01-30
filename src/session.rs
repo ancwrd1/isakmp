@@ -76,4 +76,8 @@ pub trait IsakmpSession {
     fn responder(&self) -> Arc<EndpointData>;
 
     fn session_keys(&self) -> Arc<SessionKeys>;
+
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<()>;
+
+    fn save(&self) -> anyhow::Result<Vec<u8>>;
 }

@@ -8,8 +8,7 @@ use rand::random;
 use tracing::{debug, trace};
 
 use crate::{
-    certs::CertList, ikev1::session::Ikev1Session, message::IsakmpMessage, model::*, payload::*,
-    session::IsakmpSession, transport::IsakmpTransport,
+    certs::CertList, message::IsakmpMessage, model::*, payload::*, session::IsakmpSession, transport::IsakmpTransport,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,11 +27,14 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
 pub struct Ikev1Service {
     socket_timeout: Duration,
     transport: Box<dyn IsakmpTransport + Send + Sync>,
-    session: Ikev1Session,
+    session: Box<dyn IsakmpSession + Send + Sync>,
 }
 
 impl Ikev1Service {
-    pub fn new(transport: Box<dyn IsakmpTransport + Send + Sync>, session: Ikev1Session) -> anyhow::Result<Self> {
+    pub fn new(
+        transport: Box<dyn IsakmpTransport + Send + Sync>,
+        session: Box<dyn IsakmpSession + Send + Sync>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -40,8 +42,8 @@ impl Ikev1Service {
         })
     }
 
-    pub fn session(&self) -> Ikev1Session {
-        self.session.clone()
+    pub fn session(&mut self) -> &mut dyn IsakmpSession {
+        &mut *self.session
     }
 
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
