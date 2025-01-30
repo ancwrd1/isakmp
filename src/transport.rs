@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 
 use crate::{message::IsakmpMessage, model::ExchangeType, payload::Payload};
@@ -16,9 +15,9 @@ fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
         for payload in &msg.payloads {
             if let Payload::Notification(notify) = payload {
                 if notify.message_type == 31 || notify.message_type == 9101 {
-                    return Err(anyhow!(String::from_utf8_lossy(&notify.data).into_owned()));
+                    anyhow::bail!(String::from_utf8_lossy(&notify.data).into_owned());
                 } else if notify.message_type < 31 {
-                    return Err(anyhow!("IKE notify error {}", notify.message_type));
+                    anyhow::bail!("IKE notify error {}", notify.message_type);
                 }
             }
         }

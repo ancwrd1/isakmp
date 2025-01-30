@@ -99,7 +99,7 @@ async fn do_challenge_attr(
     }
 
     let Ok(Some(password)) = tokio::time::timeout(Duration::from_secs(120), rx.recv()).await else {
-        return Err(anyhow!("Timeout while acquiring password!"));
+        anyhow::bail!("Timeout while acquiring password!");
     };
 
     Ok(ikev1
@@ -202,7 +202,7 @@ async fn main() -> anyhow::Result<()> {
     udp.connect(format!("{address}:500")).await?;
 
     let IpAddr::V4(gateway_addr) = udp.peer_addr()?.ip() else {
-        return Err(anyhow!("Not an IPv4 addres"));
+        anyhow::bail!("Not an IPv4 addres");
     };
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
@@ -263,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         if status != 1 {
-            return Err(anyhow!("Authentication failed!"));
+            anyhow::bail!("Authentication failed!");
         }
 
         service.send_ack_response(auth_attrs.identifier, message_id).await?;

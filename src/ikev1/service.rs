@@ -1,6 +1,6 @@
 use std::{net::Ipv4Addr, time::Duration};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::iproduct;
@@ -636,7 +636,7 @@ impl Ikev1Service {
                 debug!("ID payload signature verification succeeded!");
             }
             _ => {
-                return Err(anyhow!("Incomplete ID payload received!"));
+                anyhow::bail!("Incomplete ID payload received!");
             }
         }
 
