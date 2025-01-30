@@ -14,14 +14,14 @@ use crate::{
     transport::{check_informational, IsakmpTransport},
 };
 
-pub struct TcptTransport<C> {
+pub struct TcptTransport {
     address: SocketAddr,
-    codec: C,
+    codec: Box<dyn IsakmpMessageCodec + Send>,
     stream: Option<TcpStream>,
 }
 
-impl<C> TcptTransport<C> {
-    pub fn new(address: SocketAddr, codec: C) -> Self {
+impl TcptTransport {
+    pub fn new(address: SocketAddr, codec: Box<dyn IsakmpMessageCodec + Send>) -> Self {
         Self {
             address,
             codec,
@@ -98,7 +98,7 @@ async fn do_receive(stream: &mut TcpStream, timeout: Duration) -> anyhow::Result
 }
 
 #[async_trait]
-impl<C: IsakmpMessageCodec + Send> IsakmpTransport for TcptTransport<C> {
+impl IsakmpTransport for TcptTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
         let data = self.codec.encode(message);
 

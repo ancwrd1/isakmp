@@ -70,11 +70,7 @@ impl IsakmpSession for Ikev1Session {
         self.0.write().validate_message(data)
     }
 
-    fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<[u8]>,
-    {
+    fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.0.read().hash(data)
     }
 
@@ -90,11 +86,7 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().verify_signature(hash, signature, cert)
     }
 
-    fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<[u8]>,
-    {
+    fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.0.read().prf(key, data)
     }
 
@@ -437,7 +429,7 @@ impl IsakmpSession for Ikev1SessionImpl {
     }
 
     fn validate_message(&mut self, data: &[u8]) -> bool {
-        let hash = self.hash([data]).expect("Hash computation should not fail");
+        let hash = self.hash(&[data]).expect("Hash computation should not fail");
         if self.received_hashes.contains(&hash) {
             false
         } else {
@@ -446,11 +438,7 @@ impl IsakmpSession for Ikev1SessionImpl {
         }
     }
 
-    fn hash<T, I>(&self, data: I) -> anyhow::Result<Bytes>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<[u8]>,
-    {
+    fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.crypto.hash(data)
     }
 
@@ -488,11 +476,7 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.crypto.verify_signature(hash, signature, cert)
     }
 
-    fn prf<T, I>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
-    where
-        I: IntoIterator<Item = T>,
-        T: AsRef<[u8]>,
-    {
+    fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.crypto.prf(key, data)
     }
 

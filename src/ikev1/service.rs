@@ -25,14 +25,14 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
         .context("No config payload in response!")
 }
 
-pub struct Ikev1Service<T> {
+pub struct Ikev1Service {
     socket_timeout: Duration,
-    transport: T,
+    transport: Box<dyn IsakmpTransport + Send>,
     session: Ikev1Session,
 }
 
-impl<T: IsakmpTransport + Send> Ikev1Service<T> {
-    pub fn new(transport: T, session: Ikev1Session) -> anyhow::Result<Self> {
+impl Ikev1Service {
+    pub fn new(transport: Box<dyn IsakmpTransport + Send>, session: Ikev1Session) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -256,7 +256,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let remote_ip: u32 = gateway_ip.into();
 
-        let hash_r = self.session.hash([
+        let hash_r = self.session.hash(&[
             self.session.cookie_i().to_be_bytes().as_slice(),
             self.session.cookie_r().to_be_bytes().as_slice(),
             remote_ip.to_be_bytes().as_slice(),
@@ -267,7 +267,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let local_ip: u32 = local_ip.into();
 
-        let hash_i = self.session.hash([
+        let hash_i = self.session.hash(&[
             self.session.cookie_i().to_be_bytes().as_slice(),
             self.session.cookie_r().to_be_bytes().as_slice(),
             local_ip.to_be_bytes().as_slice(),
@@ -470,7 +470,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let hash = self.session.prf(
             &self.session.session_keys().skeyid_a,
-            [message_id.to_be_bytes().as_slice(), &data],
+            &[message_id.to_be_bytes().as_slice(), &data],
         )?;
 
         Ok(Payload::Hash(BasicPayload::new(hash)))
@@ -767,7 +767,7 @@ impl<T: IsakmpTransport + Send> Ikev1Service<T> {
 
         let prf = self.session.prf(
             self.session.session_keys().skeyid_a.as_ref(),
-            [&[0], response.message_id.to_be_bytes().as_slice(), &nonce_i, &nonce_r],
+            &[&[0], response.message_id.to_be_bytes().as_slice(), &nonce_i, &nonce_r],
         )?;
 
         let auth_alg: EspAuthAlgorithm = attributes

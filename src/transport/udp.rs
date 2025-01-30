@@ -16,15 +16,15 @@ use crate::{
 
 const NATT_PORT: u16 = 4500;
 
-pub struct UdpTransport<C> {
+pub struct UdpTransport {
     socket: Arc<UdpSocket>,
-    codec: C,
+    codec: Box<dyn IsakmpMessageCodec + Send>,
     message_offset: usize,
     receiver: Receiver<Bytes>,
 }
 
-impl<C> UdpTransport<C> {
-    pub fn new(socket: UdpSocket, codec: C) -> Self {
+impl UdpTransport {
+    pub fn new(socket: UdpSocket, codec: Box<dyn IsakmpMessageCodec + Send>) -> Self {
         let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
         let (tx, rx) = channel(16);
 
@@ -54,7 +54,7 @@ impl<C> UdpTransport<C> {
 }
 
 #[async_trait]
-impl<C: IsakmpMessageCodec + Send> IsakmpTransport for UdpTransport<C> {
+impl IsakmpTransport for UdpTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
         let data = self.codec.encode(message);
         debug!(

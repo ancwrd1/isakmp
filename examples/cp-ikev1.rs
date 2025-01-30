@@ -21,7 +21,7 @@ use isakmp::{
     ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
-    transport::{IsakmpTransport, UdpTransport},
+    transport::UdpTransport,
 };
 
 const CP_AUTH_BLOB: &[u8] = b"(\n\
@@ -74,8 +74,8 @@ fn get_attribute(payload: &AttributesPayload, attr: ConfigAttributeType) -> Vec<
         .collect()
 }
 
-async fn do_challenge_attr<T: IsakmpTransport + Send>(
-    ikev1: &mut Ikev1Service<T>,
+async fn do_challenge_attr(
+    ikev1: &mut Ikev1Service,
     attr: Bytes,
     identifier: u16,
     message_id: u32,
@@ -114,8 +114,8 @@ async fn do_challenge_attr<T: IsakmpTransport + Send>(
         .0)
 }
 
-async fn do_user_name<T: IsakmpTransport + Send>(
-    ikev1: &mut Ikev1Service<T>,
+async fn do_user_name(
+    ikev1: &mut Ikev1Service,
     attr_type: ConfigAttributeType,
     identifier: u16,
     message_id: u32,
@@ -137,8 +137,8 @@ async fn do_user_name<T: IsakmpTransport + Send>(
         .0)
 }
 
-async fn handle_auth_reply<T: IsakmpTransport + Send>(
-    ikev1: &mut Ikev1Service<T>,
+async fn handle_auth_reply(
+    ikev1: &mut Ikev1Service,
     payload: AttributesPayload,
     message_id: u32,
 ) -> anyhow::Result<AttributesPayload> {
@@ -215,7 +215,11 @@ async fn main() -> anyhow::Result<()> {
         .next()
         .context("No address")?;
 
-    let transport = isakmp::transport::TcptTransport::new(socket_address, Ikev1Codec::new(session.clone()));
+    let transport = Box::new(isakmp::transport::TcptTransport::new(
+        socket_address,
+        Box::new(Ikev1Codec::new(Box::new(session.clone()))),
+    ));
+
     let mut service = Ikev1Service::new(transport, session)?;
 
     let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
@@ -337,7 +341,10 @@ async fn main() -> anyhow::Result<()> {
     let mut session = Ikev1Session::new(identity.clone())?;
     session.load(&saved)?;
 
-    let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
+    let transport = Box::new(UdpTransport::new(
+        udp,
+        Box::new(Ikev1Codec::new(Box::new(session.clone()))),
+    ));
     let mut service = Ikev1Service::new(transport, session)?;
 
     let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;

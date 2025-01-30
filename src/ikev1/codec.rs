@@ -10,14 +10,14 @@ use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
 use tracing::{trace, warn};
 
-pub struct Ikev1Codec<S> {
-    session: S,
+pub struct Ikev1Codec {
+    session: Box<dyn IsakmpSession + Send>,
     cookie_i: u64,
     cookie_r: u64,
 }
 
-impl<S> Ikev1Codec<S> {
-    pub fn new(session: S) -> Self {
+impl Ikev1Codec {
+    pub fn new(session: Box<dyn IsakmpSession + Send>) -> Self {
         Self {
             session,
             cookie_i: 0,
@@ -26,7 +26,7 @@ impl<S> Ikev1Codec<S> {
     }
 }
 
-impl<S: IsakmpSession> IsakmpMessageCodec for Ikev1Codec<S> {
+impl IsakmpMessageCodec for Ikev1Codec {
     fn encode(&mut self, message: &IsakmpMessage) -> Bytes {
         if self.cookie_i == 0 {
             self.cookie_i = message.cookie_i;
