@@ -18,13 +18,13 @@ const NATT_PORT: u16 = 4500;
 
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
-    codec: Box<dyn IsakmpMessageCodec + Send>,
+    codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
     message_offset: usize,
     receiver: Receiver<Bytes>,
 }
 
 impl UdpTransport {
-    pub fn new(socket: UdpSocket, codec: Box<dyn IsakmpMessageCodec + Send>) -> Self {
+    pub fn new(socket: UdpSocket, codec: Box<dyn IsakmpMessageCodec + Send + Sync>) -> Self {
         let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
         let (tx, rx) = channel(16);
 

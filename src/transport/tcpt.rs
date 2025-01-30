@@ -16,12 +16,12 @@ use crate::{
 
 pub struct TcptTransport {
     address: SocketAddr,
-    codec: Box<dyn IsakmpMessageCodec + Send>,
+    codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
     stream: Option<TcpStream>,
 }
 
 impl TcptTransport {
-    pub fn new(address: SocketAddr, codec: Box<dyn IsakmpMessageCodec + Send>) -> Self {
+    pub fn new(address: SocketAddr, codec: Box<dyn IsakmpMessageCodec + Send + Sync>) -> Self {
         Self {
             address,
             codec,

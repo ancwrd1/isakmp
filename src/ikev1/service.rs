@@ -27,12 +27,12 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
 
 pub struct Ikev1Service {
     socket_timeout: Duration,
-    transport: Box<dyn IsakmpTransport + Send>,
+    transport: Box<dyn IsakmpTransport + Send + Sync>,
     session: Ikev1Session,
 }
 
 impl Ikev1Service {
-    pub fn new(transport: Box<dyn IsakmpTransport + Send>, session: Ikev1Session) -> anyhow::Result<Self> {
+    pub fn new(transport: Box<dyn IsakmpTransport + Send + Sync>, session: Ikev1Session) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,

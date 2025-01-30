@@ -11,13 +11,13 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::{trace, warn};
 
 pub struct Ikev1Codec {
-    session: Box<dyn IsakmpSession + Send>,
+    session: Box<dyn IsakmpSession + Send + Sync>,
     cookie_i: u64,
     cookie_r: u64,
 }
 
 impl Ikev1Codec {
-    pub fn new(session: Box<dyn IsakmpSession + Send>) -> Self {
+    pub fn new(session: Box<dyn IsakmpSession + Send + Sync>) -> Self {
         Self {
             session,
             cookie_i: 0,
