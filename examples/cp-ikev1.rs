@@ -1,6 +1,6 @@
 use std::{
     io::{stdin, stdout, Write},
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
     path::PathBuf,
     time::Duration,
 };
@@ -17,22 +17,19 @@ use tokio::{
 };
 use tracing_subscriber::EnvFilter;
 
-use isakmp::model::IdentityRequest;
 use isakmp::{
     ikev1::{codec::Ikev1Codec, service::Ikev1Service, session::Ikev1Session},
-    model::{ConfigAttributeType, EspAttributeType, Identity, IkeAttributeType},
+    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
-    transport::UdpTransport,
+    transport::{IsakmpTransport, UdpTransport},
 };
 
-type Ikev1Udp = Ikev1Service<UdpTransport<Ikev1Codec<Ikev1Session>>>;
-
-const CCC_ID: &[u8] = b"(\n\
+const CP_AUTH_BLOB: &[u8] = b"(\n\
                :clientType (TRAC)\n\
                :clientOS (Windows_7)\n\
                :oldSessionId ()\n\
                :protocolVersion (100)\n\
-               :client_mode (SYMBIAN)\n\
+               :client_mode (endpoint_security)\n\
                :selected_realm_id (vpn_Azure_Authentication))";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
@@ -77,8 +74,8 @@ fn get_attribute(payload: &AttributesPayload, attr: ConfigAttributeType) -> Vec<
         .collect()
 }
 
-async fn do_challenge_attr(
-    ikev1: &mut Ikev1Udp,
+async fn do_challenge_attr<T: IsakmpTransport + Send>(
+    ikev1: &mut Ikev1Service<T>,
     attr: Bytes,
     identifier: u16,
     message_id: u32,
@@ -117,8 +114,8 @@ async fn do_challenge_attr(
         .0)
 }
 
-async fn do_user_name(
-    ikev1: &mut Ikev1Udp,
+async fn do_user_name<T: IsakmpTransport + Send>(
+    ikev1: &mut Ikev1Service<T>,
     attr_type: ConfigAttributeType,
     identifier: u16,
     message_id: u32,
@@ -140,8 +137,8 @@ async fn do_user_name(
         .0)
 }
 
-async fn handle_auth_reply(
-    ikev1: &mut Ikev1Udp,
+async fn handle_auth_reply<T: IsakmpTransport + Send>(
+    ikev1: &mut Ikev1Service<T>,
     payload: AttributesPayload,
     message_id: u32,
 ) -> anyhow::Result<AttributesPayload> {
@@ -211,7 +208,14 @@ async fn main() -> anyhow::Result<()> {
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
     let session = Ikev1Session::new(identity.clone())?;
-    let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
+    //let transport = UdpTransport::new(udp, Ikev1Codec::new(session.clone()));
+
+    let socket_address = format!("{address}:443")
+        .to_socket_addrs()?
+        .next()
+        .context("No address")?;
+
+    let transport = isakmp::transport::TcptTransport::new(socket_address, Ikev1Codec::new(session.clone()));
     let mut service = Ikev1Service::new(transport, session)?;
 
     let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
@@ -232,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
     let identity_request = IdentityRequest {
-        auth_blob: Bytes::from_static(CCC_ID),
+        auth_blob: Bytes::from_static(CP_AUTH_BLOB),
         verify_certs,
         ca_certs,
         with_mfa: matches!(identity, Identity::None),
