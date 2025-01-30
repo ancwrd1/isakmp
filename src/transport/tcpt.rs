@@ -14,6 +14,9 @@ use crate::{
     transport::{check_informational, IsakmpTransport},
 };
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct TcptTransport {
     address: SocketAddr,
     codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
@@ -37,9 +40,9 @@ impl TcptTransport {
             }
             _ => {
                 debug!("Connecting to {}", self.address);
-                let mut stream = TcpStream::connect(self.address).await?;
+                let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(self.address)).await??;
 
-                debug!("Starting TCPT handshake");
+                debug!("Connected, starting TCPT handshake");
                 handshake(&mut stream).await?;
 
                 self.stream = Some(stream);
@@ -55,7 +58,7 @@ async fn handshake(stream: &mut TcpStream) -> anyhow::Result<()> {
         .await?;
 
     let mut header = [0u8; 16];
-    stream.read_exact(&mut header).await?;
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, stream.read_exact(&mut header)).await??;
 
     let size = u32::from_be_bytes(header[0..4].try_into()?);
     let cmd = u32::from_be_bytes(header[4..8].try_into()?);
@@ -124,6 +127,7 @@ impl IsakmpTransport for TcptTransport {
     }
 
     fn disconnect(&mut self) {
+        debug!("Disconnected");
         self.stream = None;
     }
 }
