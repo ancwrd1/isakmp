@@ -52,6 +52,12 @@ pub struct TcptTransportCodec {
     data_type: TcptDataType,
 }
 
+impl TcptTransportCodec {
+    pub fn new(data_type: TcptDataType) -> Self {
+        Self { data_type }
+    }
+}
+
 impl Encoder<Bytes> for TcptTransportCodec {
     type Error = anyhow::Error;
 
@@ -129,10 +135,7 @@ impl TcptTransport {
 }
 
 pub async fn handshake(data_type: TcptDataType, stream: &mut TcpStream) -> anyhow::Result<()> {
-    let mut framed = TcptTransportCodec {
-        data_type: TcptDataType::Cmd,
-    }
-    .framed(stream);
+    let mut framed = TcptTransportCodec::new(TcptDataType::Cmd).framed(stream);
 
     let mut data = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
     data[4..8].copy_from_slice(&data_type.as_u32().to_be_bytes());
@@ -151,13 +154,13 @@ pub async fn handshake(data_type: TcptDataType, stream: &mut TcpStream) -> anyho
 }
 
 async fn do_send(data_type: TcptDataType, stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
-    let mut framed = TcptTransportCodec { data_type }.framed(stream);
+    let mut framed = TcptTransportCodec::new(data_type).framed(stream);
     framed.send(Bytes::copy_from_slice(data)).await?;
     Ok(())
 }
 
 async fn do_receive(data_type: TcptDataType, stream: &mut TcpStream, timeout: Duration) -> anyhow::Result<Bytes> {
-    let mut framed = TcptTransportCodec { data_type }.framed(stream);
+    let mut framed = TcptTransportCodec::new(data_type).framed(stream);
     let data = tokio::time::timeout(timeout, framed.next())
         .await?
         .context("No data")??;
