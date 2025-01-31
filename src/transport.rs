@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::{message::IsakmpMessage, model::ExchangeType, payload::Payload};
 
-mod tcpt;
+pub mod tcpt;
 mod udp;
 
 pub use tcpt::{TcptDataType, TcptTransport};

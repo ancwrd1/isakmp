@@ -2,11 +2,12 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
-use bytes::Bytes;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, Interest},
-    net::TcpStream,
-};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures::sink::SinkExt;
+use futures::StreamExt;
+use tokio::{io::Interest, net::TcpStream};
+use tokio_util::codec::{Decoder, Encoder};
+
 use tracing::{debug, trace};
 
 use crate::{
@@ -19,6 +20,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TcptDataType {
+    Cmd,
     Ike,
     Esp,
 }
@@ -26,6 +28,7 @@ pub enum TcptDataType {
 impl TcptDataType {
     pub fn as_u32(&self) -> u32 {
         match self {
+            Self::Cmd => 1,
             Self::Ike => 2,
             Self::Esp => 4,
         }
@@ -37,10 +40,54 @@ impl TryFrom<u32> for TcptDataType {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
+            1 => Ok(Self::Cmd),
             2 => Ok(Self::Ike),
             4 => Ok(Self::Esp),
             _ => anyhow::bail!("Unsupported TCPT data type"),
         }
+    }
+}
+
+pub struct TcptTransportCodec {
+    data_type: TcptDataType,
+}
+
+impl Encoder<Bytes> for TcptTransportCodec {
+    type Error = anyhow::Error;
+
+    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.reserve(item.len() + 8);
+        dst.put_slice(&(item.len() as u32).to_be_bytes());
+        dst.put_slice(&self.data_type.as_u32().to_be_bytes());
+        dst.put_slice(&item);
+        Ok(())
+    }
+}
+
+impl Decoder for TcptTransportCodec {
+    type Item = Bytes;
+    type Error = anyhow::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.remaining() < 8 {
+            return Ok(None);
+        }
+
+        let size = u32::from_be_bytes(src[0..4].try_into()?);
+        let cmd = u32::from_be_bytes(src[4..8].try_into()?);
+
+        if src.remaining() < size as usize + 8 {
+            return Ok(None);
+        }
+
+        if cmd != self.data_type.as_u32() {
+            anyhow::bail!("Invalid data type");
+        }
+
+        src.advance(8);
+
+        let data = src.split_to(size as usize);
+        Ok(Some(data.freeze()))
     }
 }
 
@@ -72,68 +119,50 @@ impl TcptTransport {
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(self.address)).await??;
 
                 debug!("Connected, starting TCPT handshake");
-                self.handshake(&mut stream).await?;
+                handshake(self.data_type, &mut stream).await?;
 
                 self.stream = Some(stream);
                 Ok(self.stream.as_mut().unwrap())
             }
         }
     }
-
-    async fn handshake(&self, stream: &mut TcpStream) -> anyhow::Result<()> {
-        let mut data = [0u8; 20];
-        let len = 12u32;
-        let cmd = 1u32;
-        data[0..4].copy_from_slice(&len.to_be_bytes());
-        data[4..8].copy_from_slice(&cmd.to_be_bytes());
-        data[8..12].copy_from_slice(&1u32.to_be_bytes());
-        data[12..16].copy_from_slice(&self.data_type.as_u32().to_be_bytes());
-        data[16..20].copy_from_slice(&1u32.to_be_bytes());
-
-        stream.write_all(&data).await?;
-
-        let mut header = [0u8; 16];
-        tokio::time::timeout(HANDSHAKE_TIMEOUT, stream.read_exact(&mut header)).await??;
-
-        let size = u32::from_be_bytes(header[0..4].try_into()?);
-        let cmd = u32::from_be_bytes(header[4..8].try_into()?);
-        let flag = u32::from_be_bytes(header[12..16].try_into()?);
-
-        if size != 8 || cmd != 1 || flag != 1 {
-            anyhow::bail!("Handshake failed");
-        }
-
-        Ok(())
-    }
 }
 
-async fn do_send(stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
-    let mut buf = Vec::with_capacity(data.len() + 8);
-    buf.extend((data.len() as u32).to_be_bytes());
-    buf.extend(2u32.to_be_bytes());
-    buf.extend(data);
-    stream.write_all(&buf).await?;
+pub async fn handshake(data_type: TcptDataType, stream: &mut TcpStream) -> anyhow::Result<()> {
+    let mut framed = TcptTransportCodec {
+        data_type: TcptDataType::Cmd,
+    }
+    .framed(stream);
+
+    let mut data = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+    data[4..8].copy_from_slice(&data_type.as_u32().to_be_bytes());
+
+    framed.send(Bytes::copy_from_slice(&data)).await?;
+
+    let data = tokio::time::timeout(HANDSHAKE_TIMEOUT, framed.next())
+        .await?
+        .context("No data")??;
+
+    if data.last() != Some(&1) {
+        anyhow::bail!("Handshake failed");
+    }
+
+    Ok(())
+}
+
+async fn do_send(data_type: TcptDataType, stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
+    let mut framed = TcptTransportCodec { data_type }.framed(stream);
+    framed.send(Bytes::copy_from_slice(data)).await?;
     Ok(())
 }
 
 async fn do_receive(data_type: TcptDataType, stream: &mut TcpStream, timeout: Duration) -> anyhow::Result<Bytes> {
-    let mut header = [0u8; 8];
+    let mut framed = TcptTransportCodec { data_type }.framed(stream);
+    let data = tokio::time::timeout(timeout, framed.next())
+        .await?
+        .context("No data")??;
 
-    tokio::time::timeout(timeout, stream.read_exact(&mut header)).await??;
-
-    let size = u32::from_be_bytes(header[0..4].try_into()?);
-    let cmd = u32::from_be_bytes(header[4..8].try_into()?);
-
-    if cmd != data_type.as_u32() {
-        anyhow::bail!("Invalid data type");
-    }
-
-    let mut data = vec![0u8; size as usize];
-    stream.read_exact(&mut data).await?;
-
-    trace!("TCPT packet received: len={}, cmd={}", size, cmd);
-
-    Ok(data.into())
+    Ok(data)
 }
 
 #[async_trait]
@@ -143,8 +172,10 @@ impl IsakmpTransport for TcptTransport {
 
         trace!("Sending ISAKMP message: {:#?}", message);
 
+        let data_type = self.data_type;
         let stream = self.get_stream().await?;
-        do_send(stream, &data).await?;
+
+        do_send(data_type, stream, &data).await?;
 
         Ok(())
     }
