@@ -111,7 +111,8 @@ impl Ikev1Service {
             Payload::VendorId(CHECKPOINT_VID.into()),
             Payload::VendorId(NATT_VID.into()),
             Payload::VendorId(EXT_VID_WITH_FLAGS.into()),
-            Payload::VendorId(FRAGMENTATION_VID.into()),
+            // Doesn't seem to have any effect
+            //Payload::VendorId(FRAGMENTATION_VID.into()),
         ];
 
         Ok(IsakmpMessage {
