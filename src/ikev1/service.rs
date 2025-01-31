@@ -108,11 +108,14 @@ impl Ikev1Service {
 
         let payloads = vec![
             sa,
-            Payload::VendorId(CHECKPOINT_VID.into()),
-            Payload::VendorId(NATT_VID.into()),
-            Payload::VendorId(EXT_VID_WITH_FLAGS.into()),
+            Payload::VendorId(VID_CHECKPOINT.into()),
+            Payload::VendorId(VID_NATT.into()),
+            Payload::VendorId(VID_EXT_WITH_FLAGS.into()),
+            Payload::VendorId(VID_INITIAL_CONTACT.into()),
+            Payload::VendorId(VID_IPSEC_NAT_T.into()),
+            Payload::VendorId(VID_MS_NT5.into()),
             // Doesn't seem to have any effect
-            //Payload::VendorId(FRAGMENTATION_VID.into()),
+            //Payload::VendorId(VID_FRAGMENTATION.into()),
         ];
 
         Ok(IsakmpMessage {
