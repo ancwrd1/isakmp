@@ -96,7 +96,7 @@ impl EspCodec {
 
         let mut data = self.encrypt(params, data)?;
         let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-        let auth = self.authenticate(params, &[spi.to_be_bytes().as_slice(), &next_seq.to_be_bytes(), &data])?;
+        let auth = self.authenticate(params, &[&spi.to_be_bytes(), &next_seq.to_be_bytes(), &data])?;
         data.extend(auth);
 
         let mut buffer = vec![
