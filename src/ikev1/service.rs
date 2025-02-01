@@ -111,10 +111,9 @@ impl Ikev1Service {
             Payload::VendorId(VID_CHECKPOINT.into()),
             Payload::VendorId(VID_NATT.into()),
             Payload::VendorId(VID_EXT_WITH_FLAGS.into()),
-            Payload::VendorId(VID_INITIAL_CONTACT.into()),
-            Payload::VendorId(VID_IPSEC_NAT_T.into()),
-            Payload::VendorId(VID_MS_NT5.into()),
-            // Doesn't seem to have any effect
+            //Payload::VendorId(VID_INITIAL_CONTACT.into()),
+            //Payload::VendorId(VID_IPSEC_NAT_T.into()),
+            //Payload::VendorId(VID_MS_NT5.into()),
             //Payload::VendorId(VID_FRAGMENTATION.into()),
         ];
 
