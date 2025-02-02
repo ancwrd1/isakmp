@@ -71,6 +71,19 @@ impl EspCodec {
 
     pub fn decode_from_ip_udp(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         let ipv4 = Ipv4Packet::new(data).context("Invalid IPv4 packet")?;
+
+        if ipv4.get_source() != self.src || ipv4.get_destination() != self.dst {
+            anyhow::bail!(
+                "Invalid IP addresses: {} -> {}",
+                ipv4.get_source(),
+                ipv4.get_destination()
+            );
+        }
+
+        if ipv4.get_checksum() != checksum(&ipv4) {
+            anyhow::bail!("Invalid IPv4 checksum: {} vs {}", ipv4.get_checksum(), checksum(&ipv4));
+        }
+
         let udp = UdpPacket::new(ipv4.payload()).context("Invalid UDP packet")?;
         let esp = EspPacket::new(udp.payload()).context("Invalid ESP packet")?;
 
@@ -343,12 +356,12 @@ mod tests {
             auth_algorithm: EspAuthAlgorithm::HmacSha256,
         });
 
-        let mut codec = EspCodec::new(Ipv4Addr::new(0, 0, 0, 0), Ipv4Addr::new(0, 0, 0, 0));
+        let mut codec = EspCodec::new(Ipv4Addr::new(172, 22, 1, 156), Ipv4Addr::new(1, 1, 1, 1));
         codec.add_params(0xf47b67fe, params);
 
-        let data = include_bytes!("../tests/ip-udp-esp.bin");
+        const DATA: &[u8] = include_bytes!("../tests/ip-udp-esp.bin");
 
-        let payload = [
+        const TEST_PAYLOAD: &[u8] = &[
             0x0, 0x0, 0x0, 0x11, 0x0, 0x1, 0x0, 0x2, 0x0, 0x0, 0x1, 0x94, 0xbb, 0x38, 0x4, 0x28, 0x0, 0x0, 0x0, 0x0,
             0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
             0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
@@ -356,10 +369,10 @@ mod tests {
             0x0,
         ];
 
-        let decoded = codec.decode_from_ip_udp(data).unwrap();
+        let decoded = codec.decode_from_ip_udp(DATA).unwrap();
         let ipv4 = Ipv4Packet::new(&decoded).unwrap();
         let udp = UdpPacket::new(ipv4.payload()).unwrap();
 
-        assert_eq!(udp.payload(), payload);
+        assert_eq!(udp.payload(), TEST_PAYLOAD);
     }
 }
