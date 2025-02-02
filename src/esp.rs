@@ -80,8 +80,15 @@ impl EspCodec {
             );
         }
 
-        if ipv4.get_checksum() != checksum(&ipv4) {
-            anyhow::bail!("Invalid IPv4 checksum: {} vs {}", ipv4.get_checksum(), checksum(&ipv4));
+        let actual_checksum = checksum(&ipv4);
+        let packet_checksum = ipv4.get_checksum();
+
+        if packet_checksum != actual_checksum {
+            anyhow::bail!(
+                "Invalid IPv4 checksum: actual: {:x}, received: {:x}",
+                actual_checksum,
+                packet_checksum
+            );
         }
 
         let udp = UdpPacket::new(ipv4.payload()).context("Invalid UDP packet")?;
