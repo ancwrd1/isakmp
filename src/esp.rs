@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 use anyhow::Context;
 use bytes::Bytes;
 use openssl::{
@@ -28,6 +27,8 @@ use pnet_packet::{
 };
 use rand::random;
 use tokio::time::Instant;
+
+use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
 const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
 
@@ -74,7 +75,7 @@ impl EspCodec {
 
         if ipv4.get_source() != self.src || ipv4.get_destination() != self.dst {
             anyhow::bail!(
-                "Invalid IP addresses: {} -> {}",
+                "Unexpected IP addresses: {} -> {}",
                 ipv4.get_source(),
                 ipv4.get_destination()
             );
@@ -97,13 +98,10 @@ impl EspCodec {
         let spi = esp.get_spi();
         let seq = esp.get_seq();
 
-        let Some((_, params)) = self.params.get(&spi) else {
-            anyhow::bail!("Invalid SPI");
-        };
+        let (_, params) = self.params.get(&spi).context("Invalid SPI")?;
 
         let payload = esp.payload();
-        let auth = &payload[payload.len() - params.auth_algorithm.hash_len()..];
-        let data = &payload[0..payload.len() - params.auth_algorithm.hash_len()];
+        let (data, auth) = payload.split_at(payload.len() - params.auth_algorithm.hash_len());
 
         self.verify(params, &[&spi.to_be_bytes(), &seq.to_be_bytes(), data], auth)?;
 
@@ -158,7 +156,7 @@ impl EspCodec {
         match params.transform_id {
             TransformId::EspAesCbc => self.do_encrypt(params, Cipher::aes_256_cbc(), &random::<[u8; 16]>(), data),
             TransformId::Esp3Des => self.do_encrypt(params, Cipher::des_ede3_cbc(), &random::<[u8; 8]>(), data),
-            _ => anyhow::bail!("Unsupported transform ID"),
+            _ => anyhow::bail!("Unsupported encryption algorithm"),
         }
     }
 
@@ -187,10 +185,10 @@ impl EspCodec {
     fn verify(&self, params: &EspCryptMaterial, parts: &[&[u8]], auth: &[u8]) -> anyhow::Result<()> {
         let hmac = self.authenticate(params, parts)?;
 
-        if hmac != auth {
-            anyhow::bail!("Invalid HMAC");
-        } else {
+        if hmac == auth {
             Ok(())
+        } else {
+            Err(anyhow::anyhow!("Invalid packet signature"))
         }
     }
 
@@ -224,7 +222,7 @@ impl EspCodec {
         iv_len: usize,
         data: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
-        let mut out = vec![0u8; data.len()];
+        let mut out = vec![0u8; data.len() - iv_len + cipher.block_size()];
         let iv = &data[0..iv_len];
 
         let mut crypter = Crypter::new(cipher, Mode::Decrypt, &params.sk_e, Some(iv))?;
@@ -234,12 +232,12 @@ impl EspCodec {
         count += crypter.finalize(&mut out[count..])?;
 
         out.truncate(count);
-        let next_header = out.pop().context("Invalid ESP packet")?;
+        let next_header = out[out.len() - 1];
         if next_header != 4 {
-            anyhow::bail!("Invalid next header");
+            anyhow::bail!("Invalid next header, should be IPIP");
         }
-        let pad_len = out.pop().context("Invalid ESP packet")? as usize;
-        out.truncate(out.len() - pad_len);
+        let pad_len = out[out.len() - 2] as usize;
+        out.truncate(out.len() - pad_len - 2);
         Ok(out)
     }
 
@@ -247,7 +245,7 @@ impl EspCodec {
         match params.transform_id {
             TransformId::EspAesCbc => self.do_decrypt(params, Cipher::aes_256_cbc(), 16, data),
             TransformId::Esp3Des => self.do_decrypt(params, Cipher::des_ede3_cbc(), 8, data),
-            _ => anyhow::bail!("Unsupported transform ID"),
+            _ => anyhow::bail!("Unsupported encryption algorithm"),
         }
     }
 }
