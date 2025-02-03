@@ -185,15 +185,18 @@ impl IsakmpTransport for TcptTransport {
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
         let stream = self.stream.as_mut().context("No stream")?;
-        let data = do_receive(self.data_type, stream, timeout).await?;
+        loop {
+            let data = do_receive(self.data_type, stream, timeout).await?;
+            match self.codec.decode(&data)? {
+                Some(received_message) => {
+                    check_informational(&received_message)?;
 
-        let received_message = self.codec.decode(&data)?.context("Decode error")?;
-
-        check_informational(&received_message)?;
-
-        trace!("Received ISAKMP message: {:#?}", received_message);
-
-        Ok(received_message)
+                    trace!("Received ISAKMP message: {:#?}", received_message);
+                    return Ok(received_message);
+                }
+                None => {}
+            }
+        }
     }
 
     fn disconnect(&mut self) {
