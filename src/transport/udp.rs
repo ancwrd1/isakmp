@@ -84,14 +84,13 @@ impl IsakmpTransport for UdpTransport {
 
             match self.codec.decode(&data)? {
                 Some(msg) => {
+                    trace!("Received ISAKMP message: {:#?}", msg);
                     check_informational(&msg)?;
                     break msg;
                 }
                 None => continue,
             }
         };
-
-        trace!("Received ISAKMP message: {:#?}", received_message);
 
         Ok(received_message)
     }
