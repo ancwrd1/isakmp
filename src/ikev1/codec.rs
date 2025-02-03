@@ -8,30 +8,20 @@ use crate::{
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
-use tracing::{trace, warn};
+use tracing::trace;
 
 pub struct Ikev1Codec {
     session: Box<dyn IsakmpSession + Send + Sync>,
-    cookie_i: u64,
-    cookie_r: u64,
 }
 
 impl Ikev1Codec {
     pub fn new(session: Box<dyn IsakmpSession + Send + Sync>) -> Self {
-        Self {
-            session,
-            cookie_i: 0,
-            cookie_r: 0,
-        }
+        Self { session }
     }
 }
 
 impl IsakmpMessageCodec for Ikev1Codec {
     fn encode(&mut self, message: &IsakmpMessage) -> Bytes {
-        if self.cookie_i == 0 {
-            self.cookie_i = message.cookie_i;
-        }
-
         let mut payload_buf = BytesMut::new();
         for (i, payload) in message.payloads.iter().enumerate() {
             payload_buf.put_u8(message.next_payload(i + 1));
@@ -81,15 +71,6 @@ impl IsakmpMessageCodec for Ikev1Codec {
 
         let cookie_i = reader.read_u64::<BigEndian>()?;
         let cookie_r = reader.read_u64::<BigEndian>()?;
-
-        if self.cookie_r == 0 {
-            self.cookie_r = cookie_r;
-        }
-
-        if self.cookie_r != cookie_r || self.cookie_i != cookie_i {
-            warn!("Invalid cookies in ISAKMP message");
-            return Ok(None);
-        }
 
         let next_payload: PayloadType = reader.read_u8()?.into();
         let version = reader.read_u8()?;
