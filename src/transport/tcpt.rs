@@ -187,14 +187,11 @@ impl IsakmpTransport for TcptTransport {
         let stream = self.stream.as_mut().context("No stream")?;
         loop {
             let data = do_receive(self.data_type, stream, timeout).await?;
-            match self.codec.decode(&data)? {
-                Some(received_message) => {
-                    check_informational(&received_message)?;
+            if let Some(received_message) = self.codec.decode(&data)? {
+                check_informational(&received_message)?;
 
-                    trace!("Received ISAKMP message: {:#?}", received_message);
-                    return Ok(received_message);
-                }
-                None => {}
+                trace!("Received ISAKMP message: {:#?}", received_message);
+                return Ok(received_message);
             }
         }
     }
