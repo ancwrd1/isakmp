@@ -127,6 +127,9 @@ struct Ikev1SessionStore {
     sa_bytes: Bytes,
     received_hashes: Vec<Bytes>,
     office_mode: OfficeMode,
+    digest_type: DigestType,
+    cipher_type: CipherType,
+    group_type: GroupType,
 }
 
 struct Ikev1SessionImpl {
@@ -488,6 +491,7 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.iv = store.iv;
         self.sa_bytes = store.sa_bytes;
         self.received_hashes = store.received_hashes;
+        self.crypto = Crypto::with_parameters(store.digest_type, store.cipher_type, store.group_type)?;
 
         Ok(store.office_mode)
     }
@@ -501,6 +505,9 @@ impl IsakmpSession for Ikev1SessionImpl {
             sa_bytes: self.sa_bytes.clone(),
             received_hashes: self.received_hashes.clone(),
             office_mode: office_mode.clone(),
+            digest_type: self.crypto.digest_type(),
+            cipher_type: self.crypto.cipher_type(),
+            group_type: self.crypto.group_type(),
         };
 
         Ok(rmp_serde::to_vec(&store)?)

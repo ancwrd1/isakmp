@@ -10,6 +10,7 @@ use openssl::{
     symm::{Cipher, Crypter, Mode},
     x509::X509,
 };
+use serde::{Deserialize, Serialize};
 
 // RFC2409: Oakley group 2
 const G2_P: &[u8] = &[
@@ -35,7 +36,7 @@ const G14_P: &[u8] = &[
     255, 255, 255,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DigestType {
     Sha1,
     Sha256,
@@ -50,7 +51,7 @@ impl From<DigestType> for MessageDigest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CipherType {
     Aes128Cbc,
     Aes192Cbc,
@@ -80,7 +81,7 @@ impl From<CipherType> for Cipher {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum GroupType {
     Oakley2,
     Oakley14,
@@ -104,6 +105,9 @@ pub struct Crypto {
     dh2: Dh<Private>,
     digest: MessageDigest,
     cipher: Cipher,
+    digest_type: DigestType,
+    cipher_type: CipherType,
+    group_type: GroupType,
 }
 
 impl Crypto {
@@ -112,6 +116,9 @@ impl Crypto {
             dh2: group.try_into()?,
             digest: digest.into(),
             cipher: cipher.into(),
+            digest_type: digest,
+            cipher_type: cipher,
+            group_type: group,
         })
     }
 
@@ -179,6 +186,18 @@ impl Crypto {
 
     pub fn hash_len(&self) -> usize {
         self.digest.size()
+    }
+
+    pub fn digest_type(&self) -> DigestType {
+        self.digest_type
+    }
+
+    pub fn cipher_type(&self) -> CipherType {
+        self.cipher_type
+    }
+
+    pub fn group_type(&self) -> GroupType {
+        self.group_type
     }
 
     pub fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
