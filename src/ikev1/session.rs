@@ -1,12 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::ikev1::codec::Ikev1Codec;
-use crate::message::IsakmpMessageCodec;
 use crate::{
     certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
     crypto::{CipherType, Crypto, DigestType, GroupType},
+    ikev1::codec::Ikev1Codec,
+    message::IsakmpMessageCodec,
     model::*,
-    session::{EndpointData, IsakmpSession, SessionKeys},
+    session::{EndpointData, IsakmpSession, OfficeMode, SessionKeys},
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -105,12 +105,12 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().session_keys()
     }
 
-    fn load(&mut self, data: &[u8]) -> anyhow::Result<()> {
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode> {
         self.0.write().load(data)
     }
 
-    fn save(&self) -> anyhow::Result<Vec<u8>> {
-        self.0.write().save()
+    fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>> {
+        self.0.write().save(office_mode)
     }
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
@@ -126,6 +126,7 @@ struct Ikev1SessionStore {
     iv: HashMap<u32, Bytes>,
     sa_bytes: Bytes,
     received_hashes: Vec<Bytes>,
+    office_mode: OfficeMode,
 }
 
 struct Ikev1SessionImpl {
@@ -478,7 +479,7 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.session_keys.clone()
     }
 
-    fn load(&mut self, data: &[u8]) -> anyhow::Result<()> {
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode> {
         let store = rmp_serde::from_slice::<Ikev1SessionStore>(data)?;
 
         self.initiator = store.initiator;
@@ -488,10 +489,10 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.sa_bytes = store.sa_bytes;
         self.received_hashes = store.received_hashes;
 
-        Ok(())
+        Ok(store.office_mode)
     }
 
-    fn save(&self) -> anyhow::Result<Vec<u8>> {
+    fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>> {
         let store = Ikev1SessionStore {
             initiator: self.initiator.clone(),
             responder: self.responder.clone(),
@@ -499,6 +500,7 @@ impl IsakmpSession for Ikev1SessionImpl {
             iv: self.iv.clone(),
             sa_bytes: self.sa_bytes.clone(),
             received_hashes: self.received_hashes.clone(),
+            office_mode: office_mode.clone(),
         };
 
         Ok(rmp_serde::to_vec(&store)?)

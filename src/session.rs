@@ -1,3 +1,4 @@
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use crate::message::IsakmpMessageCodec;
@@ -24,6 +25,15 @@ pub struct EndpointData {
     pub nonce: Bytes,
     pub esp_nonce: Bytes,
     pub esp_spi: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OfficeMode {
+    pub ccc_session: String,
+    pub ip_address: Ipv4Addr,
+    pub netmask: Ipv4Addr,
+    pub dns: Vec<Ipv4Addr>,
+    pub domains: Vec<String>,
 }
 
 pub trait IsakmpSession {
@@ -78,9 +88,9 @@ pub trait IsakmpSession {
 
     fn session_keys(&self) -> Arc<SessionKeys>;
 
-    fn load(&mut self, data: &[u8]) -> anyhow::Result<()>;
+    fn load(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode>;
 
-    fn save(&self) -> anyhow::Result<Vec<u8>>;
+    fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
 }

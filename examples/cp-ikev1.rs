@@ -21,7 +21,7 @@ use isakmp::{
     ikev1::{service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
     payload::AttributesPayload,
-    session::IsakmpSession,
+    session::{IsakmpSession, OfficeMode},
     transport::{TcptDataType, UdpTransport},
 };
 
@@ -325,14 +325,18 @@ async fn main() -> anyhow::Result<()> {
         })
         .context("No lifetime in reply!")?;
 
-    println!("CCC session: {ccc_session}");
-    println!("Lifetime:    {lifetime}");
-    println!("IPv4:        {ipv4addr}");
-    println!("Netmask:     {netmask}");
-    println!("DNS:         {dns:?}");
-    println!("Domains:     {search_domains}");
+    let office_mode = OfficeMode {
+        ccc_session,
+        ip_address: ipv4addr,
+        netmask,
+        dns,
+        domains: search_domains.split([',', ';']).map(ToOwned::to_owned).collect(),
+    };
 
-    let saved = service.session().save()?;
+    println!("Lifetime: {}", lifetime);
+    println!("Office mode: {:#?}", office_mode);
+
+    let saved = service.session().save(&office_mode)?;
 
     drop(service);
 
@@ -340,7 +344,8 @@ async fn main() -> anyhow::Result<()> {
     udp.connect(format!("{address}:500")).await?;
 
     let mut session = Ikev1Session::new(identity.clone())?;
-    session.load(&saved)?;
+    let office_mode = session.load(&saved)?;
+    println!("Loaded office mode: {:#?}", office_mode);
 
     let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
