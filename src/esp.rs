@@ -41,20 +41,28 @@ pub struct Esp {
     payload: Vec<u8>,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum EspEncapType {
+    None,
+    Udp,
+}
+
 pub struct EspCodec {
     params: HashMap<u32, (Instant, Arc<EspCryptMaterial>)>,
     src: Ipv4Addr,
     dst: Ipv4Addr,
     seq_counter: AtomicU32,
+    encap_type: EspEncapType,
 }
 
 impl EspCodec {
-    pub fn new(src: Ipv4Addr, dst: Ipv4Addr) -> Self {
+    pub fn new(src: Ipv4Addr, dst: Ipv4Addr, encap_type: EspEncapType) -> Self {
         Self {
             params: HashMap::new(),
             src,
             dst,
             seq_counter: AtomicU32::new(1),
+            encap_type,
         }
     }
 
@@ -70,7 +78,21 @@ impl EspCodec {
         self.params.insert(spi, (Instant::now(), params));
     }
 
-    pub fn decode_from_ip_udp(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    pub fn decode(&self, data_attribute: &[u8]) -> anyhow::Result<Bytes> {
+        match self.encap_type {
+            EspEncapType::None => self.decode_from_esp(data_attribute),
+            EspEncapType::Udp => self.decode_from_ip_udp(data_attribute),
+        }
+    }
+
+    pub fn encode(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        match self.encap_type {
+            EspEncapType::None => self.encode_to_esp(data),
+            EspEncapType::Udp => self.encode_to_ip_udp(data),
+        }
+    }
+
+    fn decode_from_ip_udp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let ipv4 = Ipv4Packet::new(data).context("Invalid IPv4 packet")?;
 
         if ipv4.get_source() != self.src || ipv4.get_destination() != self.dst {
@@ -93,7 +115,12 @@ impl EspCodec {
         }
 
         let udp = UdpPacket::new(ipv4.payload()).context("Invalid UDP packet")?;
-        let esp = EspPacket::new(udp.payload()).context("Invalid ESP packet")?;
+
+        self.decode_from_esp(udp.payload())
+    }
+
+    fn decode_from_esp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        let esp = EspPacket::new(data).context("Invalid ESP packet")?;
 
         let spi = esp.get_spi();
         let seq = esp.get_seq();
@@ -106,10 +133,10 @@ impl EspCodec {
         self.verify(params, &[&spi.to_be_bytes(), &seq.to_be_bytes(), data], auth)?;
 
         let decrypted = self.decrypt(params, data)?;
-        Ok(decrypted)
+        Ok(decrypted.into())
     }
 
-    pub fn encode_to_ip_udp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+    fn encode_to_ip_udp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let (spi, (_, params)) = self.params.iter().next().context("No ESP parameters")?;
 
         let mut data = self.encrypt(params, data)?;
@@ -148,6 +175,24 @@ impl EspCodec {
         esp.set_payload(&data);
 
         ipv4.set_checksum(checksum(&ipv4.to_immutable()));
+
+        Ok(buffer.into())
+    }
+
+    fn encode_to_esp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+        let (spi, (_, params)) = self.params.iter().next().context("No ESP parameters")?;
+
+        let mut data = self.encrypt(params, data)?;
+        let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
+        let auth = self.authenticate(params, &[&spi.to_be_bytes(), &next_seq.to_be_bytes(), &data])?;
+        data.extend(auth);
+
+        let mut buffer = vec![0u8; data.len() + EspPacket::minimum_packet_size()];
+
+        let mut esp = MutableEspPacket::new(&mut buffer).context("Invalid ESP packet")?;
+        esp.set_spi(*spi);
+        esp.set_seq(next_seq);
+        esp.set_payload(&data);
 
         Ok(buffer.into())
     }
@@ -262,7 +307,13 @@ mod tests {
 
     use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
-    fn test_esp_codec(sk_e: &[u8], sk_a: &[u8], transform_id: TransformId, auth_algorithm: EspAuthAlgorithm) {
+    fn test_esp_codec(
+        encap_type: EspEncapType,
+        sk_e: &[u8],
+        sk_a: &[u8],
+        transform_id: TransformId,
+        auth_algorithm: EspAuthAlgorithm,
+    ) {
         let params = Arc::new(EspCryptMaterial {
             spi: 0x01020304,
             sk_e: Bytes::copy_from_slice(sk_e),
@@ -275,7 +326,7 @@ mod tests {
         let src = Ipv4Addr::new(192, 168, 0, 1);
         let dst = Ipv4Addr::new(192, 168, 0, 2);
 
-        let mut codec = EspCodec::new(src, dst);
+        let mut codec = EspCodec::new(src, dst, encap_type);
         codec.add_params(0x01020304, params);
 
         let data = b"quick brown fox jumps over the lazy dog";
@@ -283,12 +334,13 @@ mod tests {
         let encoded = codec.encode_to_ip_udp(data).unwrap();
         let decoded = codec.decode_from_ip_udp(&encoded).unwrap();
 
-        assert_eq!(decoded, data);
+        assert_eq!(decoded.as_ref(), data);
     }
 
     #[test]
-    fn test_esp_codec_aes_hmac_sha256() {
+    fn test_esp_codec_aes_hmac_sha256_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
             &random::<[u8; 32]>(),
             &random::<[u8; 32]>(),
             TransformId::EspAesCbc,
@@ -297,8 +349,9 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_aes_hmac_sha160() {
+    fn test_esp_codec_aes_hmac_sha160_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
             &random::<[u8; 32]>(),
             &random::<[u8; 20]>(),
             TransformId::EspAesCbc,
@@ -307,8 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_aes_hmac_sha96() {
+    fn test_esp_codec_aes_hmac_sha96_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
             &random::<[u8; 32]>(),
             &random::<[u8; 20]>(),
             TransformId::EspAesCbc,
@@ -317,8 +371,9 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_3des_hmac_sha256() {
+    fn test_esp_codec_3des_hmac_sha256_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
             &random::<[u8; 24]>(),
             &random::<[u8; 32]>(),
             TransformId::Esp3Des,
@@ -327,8 +382,9 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_3des_hmac_sha160() {
+    fn test_esp_codec_3des_hmac_sha160_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
             &random::<[u8; 24]>(),
             &random::<[u8; 20]>(),
             TransformId::Esp3Des,
@@ -337,8 +393,75 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_3des_hmac_sha96() {
+    fn test_esp_codec_3des_hmac_sha96_udp() {
         test_esp_codec(
+            EspEncapType::Udp,
+            &random::<[u8; 24]>(),
+            &random::<[u8; 20]>(),
+            TransformId::Esp3Des,
+            EspAuthAlgorithm::HmacSha96,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_aes_hmac_sha256_none() {
+        test_esp_codec(
+            EspEncapType::None,
+            &random::<[u8; 32]>(),
+            &random::<[u8; 32]>(),
+            TransformId::EspAesCbc,
+            EspAuthAlgorithm::HmacSha256,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_aes_hmac_sha160_none() {
+        test_esp_codec(
+            EspEncapType::None,
+            &random::<[u8; 32]>(),
+            &random::<[u8; 20]>(),
+            TransformId::EspAesCbc,
+            EspAuthAlgorithm::HmacSha160,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_aes_hmac_sha96_none() {
+        test_esp_codec(
+            EspEncapType::None,
+            &random::<[u8; 32]>(),
+            &random::<[u8; 20]>(),
+            TransformId::EspAesCbc,
+            EspAuthAlgorithm::HmacSha96,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_3des_hmac_sha256_none() {
+        test_esp_codec(
+            EspEncapType::None,
+            &random::<[u8; 24]>(),
+            &random::<[u8; 32]>(),
+            TransformId::Esp3Des,
+            EspAuthAlgorithm::HmacSha256,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_3des_hmac_sha160_none() {
+        test_esp_codec(
+            EspEncapType::None,
+            &random::<[u8; 24]>(),
+            &random::<[u8; 20]>(),
+            TransformId::Esp3Des,
+            EspAuthAlgorithm::HmacSha160,
+        );
+    }
+
+    #[test]
+    fn test_esp_codec_3des_hmac_sha96_none() {
+        test_esp_codec(
+            EspEncapType::None,
             &random::<[u8; 24]>(),
             &random::<[u8; 20]>(),
             TransformId::Esp3Des,
@@ -361,7 +484,11 @@ mod tests {
             auth_algorithm: EspAuthAlgorithm::HmacSha256,
         });
 
-        let mut codec = EspCodec::new(Ipv4Addr::new(172, 22, 1, 156), Ipv4Addr::new(1, 1, 1, 1));
+        let mut codec = EspCodec::new(
+            Ipv4Addr::new(172, 22, 1, 156),
+            Ipv4Addr::new(1, 1, 1, 1),
+            EspEncapType::Udp,
+        );
         codec.add_params(0xf47b67fe, params);
 
         const DATA: &[u8] = include_bytes!("../tests/ip-udp-esp.bin");
