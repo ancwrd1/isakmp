@@ -242,7 +242,7 @@ impl EspCodec {
 
         let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
         plain.extend(data);
-        plain.extend(iter::repeat(0).take(pad_len));
+        plain.extend(iter::repeat_n(0, pad_len));
         plain.push(pad_len as u8);
         plain.push(4); // next header: IPIP
 

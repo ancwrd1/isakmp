@@ -32,13 +32,11 @@ impl IsakmpMessageCodec for Ikev1Codec {
         }
 
         let payload = if message.flags.contains(IsakmpFlags::ENCRYPTION) {
-            let n = payload_buf.len();
-            let m = self.session.cipher_block_size();
-            let padlen = m - ((n + 1) % m);
-            for _ in 0..padlen {
-                payload_buf.put_u8(0);
-            }
-            payload_buf.put_u8(padlen as u8);
+            let block_size = self.session.cipher_block_size();
+            let pad_len = block_size - ((payload_buf.len() + 1) % block_size);
+            payload_buf.extend(std::iter::repeat_n(0, pad_len));
+            payload_buf.put_u8(pad_len as u8);
+
             self.session
                 .encrypt_and_set_iv(&payload_buf.freeze(), message.message_id)
                 .unwrap_or_default()
