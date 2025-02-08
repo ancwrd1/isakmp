@@ -78,10 +78,10 @@ impl EspCodec {
         self.params.insert(spi, (Instant::now(), params));
     }
 
-    pub fn decode(&self, data_attribute: &[u8]) -> anyhow::Result<Bytes> {
+    pub fn decode(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         match self.encap_type {
-            EspEncapType::None => self.decode_from_esp(data_attribute),
-            EspEncapType::Udp => self.decode_from_ip_udp(data_attribute),
+            EspEncapType::None => self.decode_from_esp(data),
+            EspEncapType::Udp => self.decode_from_ip_udp(data),
         }
     }
 
