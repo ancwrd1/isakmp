@@ -202,7 +202,6 @@ impl Ikev1SessionImpl {
             sk_e,
             sk_a,
             transform_id,
-            key_length,
             auth_algorithm,
         })
     }

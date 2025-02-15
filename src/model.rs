@@ -921,7 +921,6 @@ pub struct EspCryptMaterial {
     pub sk_e: Bytes,
     pub sk_a: Bytes,
     pub transform_id: TransformId,
-    pub key_length: usize,
     pub auth_algorithm: EspAuthAlgorithm,
 }
 

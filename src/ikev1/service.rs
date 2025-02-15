@@ -867,13 +867,13 @@ impl Ikev1Service {
         trace!("IN  SPI : {:04x}", esp_in.spi);
         trace!("IN  ENC : {}", hex::encode(&esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&esp_in.sk_a));
-        trace!("IN  KEYL: {}", esp_in.key_length);
+        trace!("IN  KEYL: {}", esp_in.sk_e.len());
         trace!("IN  EALG: {:?}", esp_in.transform_id);
         trace!("IN  AALG: {:?}", esp_in.auth_algorithm);
         trace!("OUT SPI : {:04x}", esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&esp_out.sk_a));
-        trace!("OUT KEYL: {}", esp_out.key_length);
+        trace!("OUT KEYL: {}", esp_out.sk_e.len());
         trace!("OUT EALG: {:?}", esp_out.transform_id);
         trace!("OUT AALG: {:?}", esp_out.auth_algorithm);
 

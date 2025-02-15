@@ -205,7 +205,7 @@ impl EspCodec {
         };
         self.do_encrypt(
             params,
-            CipherType::new_for_esp(params.transform_id, params.key_length)?.into(),
+            CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into(),
             iv,
             data,
         )
@@ -300,7 +300,7 @@ impl EspCodec {
         };
         self.do_decrypt(
             params,
-            CipherType::new_for_esp(params.transform_id, params.key_length)?.into(),
+            CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into(),
             iv_len,
             data,
         )
@@ -331,7 +331,6 @@ mod tests {
             sk_e: Bytes::copy_from_slice(sk_e),
             sk_a: Bytes::copy_from_slice(sk_a),
             transform_id,
-            key_length: sk_e.len(),
             auth_algorithm,
         });
 
@@ -386,7 +385,6 @@ mod tests {
                 &hex::decode(b"b8321902c9aca5b5551f941629c1250d1c55161686a4ab3a22261f3416b4528d").unwrap(),
             ),
             transform_id: TransformId::EspAesCbc,
-            key_length: 32,
             auth_algorithm: EspAuthAlgorithm::HmacSha256,
         });
 
