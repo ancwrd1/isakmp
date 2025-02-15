@@ -1,3 +1,4 @@
+use crate::model::{IkeEncryptionAlgorithm, TransformId};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use openssl::{
@@ -59,16 +60,30 @@ pub enum CipherType {
     DesEde3Cbc,
 }
 
-impl TryFrom<usize> for CipherType {
-    type Error = anyhow::Error;
+impl CipherType {
+    pub fn new_for_ike(enc_alg: IkeEncryptionAlgorithm, key_len: usize) -> anyhow::Result<Self> {
+        match enc_alg {
+            IkeEncryptionAlgorithm::AesCbc => match key_len {
+                16 => Ok(Self::Aes128Cbc),
+                24 => Ok(Self::Aes192Cbc),
+                32 => Ok(Self::Aes256Cbc),
+                _ => Err(anyhow!("Unsupported key len: {}", key_len)),
+            },
+            IkeEncryptionAlgorithm::DesEde3Cbc => Ok(Self::DesEde3Cbc),
+            _ => Err(anyhow!("Unsupported encryption algorithm: {:?}", enc_alg)),
+        }
+    }
 
-    fn try_from(key_len: usize) -> Result<Self, Self::Error> {
-        match key_len {
-            0 => Ok(Self::DesEde3Cbc),
-            16 => Ok(Self::Aes128Cbc),
-            24 => Ok(Self::Aes192Cbc),
-            32 => Ok(Self::Aes256Cbc),
-            _ => Err(anyhow!("Unsupported key len: {}", key_len)),
+    pub fn new_for_esp(transform_id: TransformId, key_len: usize) -> anyhow::Result<Self> {
+        match transform_id {
+            TransformId::EspAesCbc => match key_len {
+                16 => Ok(Self::Aes128Cbc),
+                24 => Ok(Self::Aes192Cbc),
+                32 => Ok(Self::Aes256Cbc),
+                _ => Err(anyhow!("Unsupported key len: {}", key_len)),
+            },
+            TransformId::Esp3Des => Ok(Self::DesEde3Cbc),
+            _ => Err(anyhow!("Unsupported transform id: {:?}", transform_id)),
         }
     }
 }

@@ -562,8 +562,15 @@ impl Ikev1Service {
 
         debug!("Negotiated SA group: {:?}", group);
 
-        self.session
-            .init_from_sa(response.cookie_r, sa_bytes, hash_alg, key_len, group)?;
+        let proposal = SaProposal {
+            cookie_r: response.cookie_r,
+            sa_bytes,
+            hash_alg,
+            enc_alg,
+            key_len,
+            group,
+        };
+        self.session.init_from_sa(proposal)?;
 
         debug!("End SA proposal");
 

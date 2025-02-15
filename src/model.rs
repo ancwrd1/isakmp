@@ -926,6 +926,16 @@ pub struct EspCryptMaterial {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct SaProposal {
+    pub cookie_r: u64,
+    pub sa_bytes: Bytes,
+    pub hash_alg: IkeHashAlgorithm,
+    pub enc_alg: IkeEncryptionAlgorithm,
+    pub key_len: usize,
+    pub group: IkeGroupDescription,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct EspProposal {
     pub spi_i: u32,
     pub nonce_i: Bytes,

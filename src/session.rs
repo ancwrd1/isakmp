@@ -1,10 +1,10 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use crate::message::IsakmpMessageCodec;
 use crate::{
     certs::ClientCertificate,
-    model::{EspCryptMaterial, EspProposal, IkeGroupDescription, IkeHashAlgorithm},
+    message::IsakmpMessageCodec,
+    model::{EspCryptMaterial, EspProposal, SaProposal},
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -37,14 +37,7 @@ pub struct OfficeMode {
 }
 
 pub trait IsakmpSession {
-    fn init_from_sa(
-        &mut self,
-        cookie_r: u64,
-        sa_bytes: Bytes,
-        hash_alg: IkeHashAlgorithm,
-        key_len: usize,
-        group: IkeGroupDescription,
-    ) -> anyhow::Result<()>;
+    fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()>;
 
     fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()>;
 

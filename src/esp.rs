@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use crate::crypto::CipherType;
+use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 use anyhow::Context;
 use bytes::Bytes;
 use openssl::{
@@ -27,8 +29,6 @@ use pnet_packet::{
 };
 use rand::random;
 use tokio::time::Instant;
-
-use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
 const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
 
@@ -198,11 +198,17 @@ impl EspCodec {
     }
 
     fn encrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        match params.transform_id {
-            TransformId::EspAesCbc => self.do_encrypt(params, Cipher::aes_256_cbc(), &random::<[u8; 16]>(), data),
-            TransformId::Esp3Des => self.do_encrypt(params, Cipher::des_ede3_cbc(), &random::<[u8; 8]>(), data),
+        let iv: &[u8] = match params.transform_id {
+            TransformId::Esp3Des => &random::<[u8; 8]>(),
+            TransformId::EspAesCbc => &random::<[u8; 16]>(),
             _ => anyhow::bail!("Unsupported encryption algorithm"),
-        }
+        };
+        self.do_encrypt(
+            params,
+            CipherType::new_for_esp(params.transform_id, params.key_length)?.into(),
+            iv,
+            data,
+        )
     }
 
     fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
@@ -287,11 +293,17 @@ impl EspCodec {
     }
 
     fn decrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        match params.transform_id {
-            TransformId::EspAesCbc => self.do_decrypt(params, Cipher::aes_256_cbc(), 16, data),
-            TransformId::Esp3Des => self.do_decrypt(params, Cipher::des_ede3_cbc(), 8, data),
+        let iv_len = match params.transform_id {
+            TransformId::Esp3Des => 8,
+            TransformId::EspAesCbc => 16,
             _ => anyhow::bail!("Unsupported encryption algorithm"),
-        }
+        };
+        self.do_decrypt(
+            params,
+            CipherType::new_for_esp(params.transform_id, params.key_length)?.into(),
+            iv_len,
+            data,
+        )
     }
 }
 
@@ -301,13 +313,13 @@ mod tests {
 
     use super::*;
     use bytes::Bytes;
+    use itertools::iproduct;
     use pnet_macros_support::packet::Packet;
     use pnet_packet::{ipv4::Ipv4Packet, udp::UdpPacket};
-    use rand::random;
 
     use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
-    fn test_esp_codec(
+    fn do_test_esp_codec(
         encap_type: EspEncapType,
         sk_e: &[u8],
         sk_a: &[u8],
@@ -338,135 +350,29 @@ mod tests {
     }
 
     #[test]
-    fn test_esp_codec_aes_hmac_sha256_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 32]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha256,
-        );
-    }
+    fn test_esp_codec_combinations() {
+        for (transform_id, key_lengths) in [
+            (TransformId::Esp3Des, vec![24]),
+            (TransformId::EspAesCbc, vec![16, 24, 32]),
+        ] {
+            let encaps = iproduct!(
+                [EspEncapType::Udp, EspEncapType::None],
+                key_lengths,
+                [
+                    (EspAuthAlgorithm::HmacSha96, 20),
+                    (EspAuthAlgorithm::HmacSha160, 20),
+                    (EspAuthAlgorithm::HmacSha256, 32),
+                ]
+            );
 
-    #[test]
-    fn test_esp_codec_aes_hmac_sha160_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 20]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha160,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_aes_hmac_sha96_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 20]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha96,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha256_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 32]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha256,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha160_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 20]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha160,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha96_udp() {
-        test_esp_codec(
-            EspEncapType::Udp,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 20]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha96,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_aes_hmac_sha256_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 32]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha256,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_aes_hmac_sha160_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 20]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha160,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_aes_hmac_sha96_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 32]>(),
-            &random::<[u8; 20]>(),
-            TransformId::EspAesCbc,
-            EspAuthAlgorithm::HmacSha96,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha256_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 32]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha256,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha160_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 20]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha160,
-        );
-    }
-
-    #[test]
-    fn test_esp_codec_3des_hmac_sha96_none() {
-        test_esp_codec(
-            EspEncapType::None,
-            &random::<[u8; 24]>(),
-            &random::<[u8; 20]>(),
-            TransformId::Esp3Des,
-            EspAuthAlgorithm::HmacSha96,
-        );
+            for (encap, sk_e_len, (alg, sk_a_len)) in encaps {
+                let mut sk_e = vec![0; sk_e_len];
+                rand::fill(&mut sk_e[..]);
+                let mut sk_a = vec![0; sk_a_len];
+                rand::fill(&mut sk_a[..]);
+                do_test_esp_codec(encap, &sk_e, &sk_a, transform_id, alg);
+            }
+        }
     }
 
     #[test]

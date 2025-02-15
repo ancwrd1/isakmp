@@ -24,17 +24,8 @@ impl Ikev1Session {
 }
 
 impl IsakmpSession for Ikev1Session {
-    fn init_from_sa(
-        &mut self,
-        cookie_r: u64,
-        sa_bytes: Bytes,
-        hash_alg: IkeHashAlgorithm,
-        key_len: usize,
-        group: IkeGroupDescription,
-    ) -> anyhow::Result<()> {
-        self.0
-            .write()
-            .init_from_sa(cookie_r, sa_bytes, hash_alg, key_len, group)
+    fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
+        self.0.write().init_from_sa(proposal)
     }
 
     fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
@@ -230,34 +221,27 @@ impl Ikev1SessionImpl {
 }
 
 impl IsakmpSession for Ikev1SessionImpl {
-    fn init_from_sa(
-        &mut self,
-        cookie_r: u64,
-        sa_bytes: Bytes,
-        hash_alg: IkeHashAlgorithm,
-        key_len: usize,
-        group: IkeGroupDescription,
-    ) -> anyhow::Result<()> {
-        self.sa_bytes = sa_bytes;
+    fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
+        self.sa_bytes = proposal.sa_bytes;
 
-        let digest = match hash_alg {
+        let digest = match proposal.hash_alg {
             IkeHashAlgorithm::Sha => DigestType::Sha1,
             IkeHashAlgorithm::Sha256 => DigestType::Sha256,
-            _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", hash_alg)),
+            _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", proposal.hash_alg)),
         };
 
-        let cipher = key_len.try_into()?;
+        let cipher = CipherType::new_for_ike(proposal.enc_alg, proposal.key_len)?;
 
-        let group = match group {
+        let group = match proposal.group {
             IkeGroupDescription::Oakley2 => GroupType::Oakley2,
             IkeGroupDescription::Oakley14 => GroupType::Oakley14,
-            IkeGroupDescription::Other(_) => return Err(anyhow!("Unsupported group: {:?}", group)),
+            IkeGroupDescription::Other(_) => return Err(anyhow!("Unsupported group: {:?}", proposal.group)),
         };
 
         self.crypto = Crypto::with_parameters(digest, cipher, group)?;
 
         self.responder = Arc::new(EndpointData {
-            cookie: cookie_r,
+            cookie: proposal.cookie_r,
             ..(*self.responder).clone()
         });
 
