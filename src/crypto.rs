@@ -56,6 +56,7 @@ pub enum CipherType {
     Aes128Cbc,
     Aes192Cbc,
     Aes256Cbc,
+    DesEde3Cbc,
 }
 
 impl TryFrom<usize> for CipherType {
@@ -63,6 +64,7 @@ impl TryFrom<usize> for CipherType {
 
     fn try_from(key_len: usize) -> Result<Self, Self::Error> {
         match key_len {
+            0 => Ok(Self::DesEde3Cbc),
             16 => Ok(Self::Aes128Cbc),
             24 => Ok(Self::Aes192Cbc),
             32 => Ok(Self::Aes256Cbc),
@@ -77,6 +79,7 @@ impl From<CipherType> for Cipher {
             CipherType::Aes128Cbc => Cipher::aes_128_cbc(),
             CipherType::Aes192Cbc => Cipher::aes_192_cbc(),
             CipherType::Aes256Cbc => Cipher::aes_256_cbc(),
+            CipherType::DesEde3Cbc => Cipher::des_ede3_cbc(),
         }
     }
 }

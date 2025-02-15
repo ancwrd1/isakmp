@@ -118,6 +118,7 @@ impl From<TransformId> for u8 {
 pub enum IkeEncryptionAlgorithm {
     #[default]
     AesCbc,
+    DesEde3Cbc,
     Other(u16),
 }
 
@@ -125,6 +126,7 @@ impl From<u16> for IkeEncryptionAlgorithm {
     fn from(value: u16) -> Self {
         match value {
             7 => Self::AesCbc,
+            5 => Self::DesEde3Cbc,
             other => Self::Other(other),
         }
     }
@@ -134,6 +136,7 @@ impl From<IkeEncryptionAlgorithm> for u16 {
     fn from(value: IkeEncryptionAlgorithm) -> Self {
         match value {
             IkeEncryptionAlgorithm::AesCbc => 7,
+            IkeEncryptionAlgorithm::DesEde3Cbc => 5,
             IkeEncryptionAlgorithm::Other(u) => u,
         }
     }

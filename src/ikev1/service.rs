@@ -49,48 +49,53 @@ impl Ikev1Service {
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
         let mut transforms = Vec::new();
 
-        let proposals = iproduct!(
-            [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha],
-            [256, 192, 128],
-            [IkeGroupDescription::Oakley14, IkeGroupDescription::Oakley2]
-        );
-
-        for (auth, key_len, group) in proposals {
-            trace!(
-                "Adding SA transform: auth={:?} key_len={} group={:?}",
-                auth,
-                key_len,
-                group
+        for (alg, key_lengths) in [
+            (IkeEncryptionAlgorithm::AesCbc, vec![256, 192, 128]),
+            (IkeEncryptionAlgorithm::DesEde3Cbc, vec![0]),
+        ] {
+            let proposals = iproduct!(
+                [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha],
+                key_lengths,
+                [IkeGroupDescription::Oakley14, IkeGroupDescription::Oakley2]
             );
 
-            let attributes = vec![
-                DataAttribute::short(
-                    IkeAttributeType::EncryptionAlgorithm.into(),
-                    IkeEncryptionAlgorithm::AesCbc.into(),
-                ),
-                DataAttribute::short(IkeAttributeType::HashAlgorithm.into(), auth.into()),
-                DataAttribute::short(IkeAttributeType::GroupDescription.into(), group.into()),
-                DataAttribute::short(
-                    IkeAttributeType::AuthenticationMethod.into(),
-                    if self.session.client_certificate().is_some() {
-                        IkeAuthMethod::RsaSignature.into()
-                    } else {
-                        IkeAuthMethod::HybridInitRsa.into()
-                    },
-                ),
-                DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
-                DataAttribute::long(
-                    IkeAttributeType::LifeDuration.into(),
-                    Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
-                ),
-                DataAttribute::short(IkeAttributeType::KeyLength.into(), key_len),
-            ];
+            for (auth, key_len, group) in proposals {
+                trace!(
+                    "Adding SA transform: auth={:?} key_len={} group={:?}",
+                    auth,
+                    key_len,
+                    group
+                );
 
-            transforms.push(TransformPayload {
-                transform_num: (transforms.len() + 1) as _,
-                transform_id: TransformId::KeyIke,
-                attributes,
-            });
+                let mut attributes = vec![
+                    DataAttribute::short(IkeAttributeType::EncryptionAlgorithm.into(), alg.into()),
+                    DataAttribute::short(IkeAttributeType::HashAlgorithm.into(), auth.into()),
+                    DataAttribute::short(IkeAttributeType::GroupDescription.into(), group.into()),
+                    DataAttribute::short(
+                        IkeAttributeType::AuthenticationMethod.into(),
+                        if self.session.client_certificate().is_some() {
+                            IkeAuthMethod::RsaSignature.into()
+                        } else {
+                            IkeAuthMethod::HybridInitRsa.into()
+                        },
+                    ),
+                    DataAttribute::short(IkeAttributeType::LifeType.into(), LifeType::Seconds.into()),
+                    DataAttribute::long(
+                        IkeAttributeType::LifeDuration.into(),
+                        Bytes::copy_from_slice(&(lifetime.as_secs() as u32).to_be_bytes()),
+                    ),
+                ];
+
+                if key_len != 0 {
+                    attributes.push(DataAttribute::short(IkeAttributeType::KeyLength.into(), key_len));
+                }
+
+                transforms.push(TransformPayload {
+                    transform_num: (transforms.len() + 1) as _,
+                    transform_id: TransformId::KeyIke,
+                    attributes,
+                });
+            }
         }
 
         let proposal = Payload::Proposal(ProposalPayload {
@@ -514,16 +519,33 @@ impl Ikev1Service {
 
         debug!("Negotiated SA hash algorithm: {:?}", hash_alg);
 
-        let key_len = attributes
+        let enc_alg: IkeEncryptionAlgorithm = attributes
             .iter()
             .find_map(|a| {
-                if a.attribute_type == IkeAttributeType::KeyLength.into() {
-                    a.as_short().map(|k| k as usize / 8)
+                if a.attribute_type == IkeAttributeType::EncryptionAlgorithm.into() {
+                    a.as_short().map(Into::into)
                 } else {
                     None
                 }
             })
-            .context("No key length in response!")?;
+            .context("No hash algorithm in response!")?;
+
+        debug!("Negotiated SA encryption algorithm: {:?}", enc_alg);
+
+        let key_len = if enc_alg == IkeEncryptionAlgorithm::DesEde3Cbc {
+            0
+        } else {
+            attributes
+                .iter()
+                .find_map(|a| {
+                    if a.attribute_type == IkeAttributeType::KeyLength.into() {
+                        a.as_short().map(|k| k as usize / 8)
+                    } else {
+                        None
+                    }
+                })
+                .context("No key length in response!")?
+        };
 
         debug!("Negotiated SA key length: {}", key_len);
 
