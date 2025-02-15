@@ -203,12 +203,29 @@ impl EspCodec {
             TransformId::EspAesCbc => &random::<[u8; 16]>(),
             _ => anyhow::bail!("Unsupported encryption algorithm"),
         };
-        self.do_encrypt(
-            params,
-            CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into(),
-            iv,
-            data,
-        )
+
+        let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
+
+        let pad_len = cipher.block_size() - ((data.len() + 2) % cipher.block_size());
+
+        let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
+        plain.extend(data);
+        plain.extend(iter::repeat(0).take(pad_len));
+        plain.push(pad_len as u8);
+        plain.push(4); // next header: IPIP
+
+        let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
+
+        out[0..iv.len()].copy_from_slice(iv);
+
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, &params.sk_e, Some(iv))?;
+        crypter.pad(false);
+
+        let mut count = crypter.update(&plain, &mut out[iv.len()..])?;
+        count += crypter.finalize(&mut out[iv.len() + count..])?;
+
+        out.truncate(count + iv.len());
+        Ok(out)
     }
 
     fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
@@ -243,36 +260,15 @@ impl EspCodec {
         }
     }
 
-    fn do_encrypt(&self, params: &EspCryptMaterial, cipher: Cipher, iv: &[u8], data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let pad_len = cipher.block_size() - ((data.len() + 2) % cipher.block_size());
+    fn decrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let iv_len = match params.transform_id {
+            TransformId::Esp3Des => 8,
+            TransformId::EspAesCbc => 16,
+            _ => anyhow::bail!("Unsupported encryption algorithm"),
+        };
 
-        let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
-        plain.extend(data);
-        plain.extend(iter::repeat(0).take(pad_len));
-        plain.push(pad_len as u8);
-        plain.push(4); // next header: IPIP
+        let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
 
-        let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
-
-        out[0..iv.len()].copy_from_slice(iv);
-
-        let mut crypter = Crypter::new(cipher, Mode::Encrypt, &params.sk_e, Some(iv))?;
-        crypter.pad(false);
-
-        let mut count = crypter.update(&plain, &mut out[iv.len()..])?;
-        count += crypter.finalize(&mut out[iv.len() + count..])?;
-
-        out.truncate(count + iv.len());
-        Ok(out)
-    }
-
-    fn do_decrypt(
-        &self,
-        params: &EspCryptMaterial,
-        cipher: Cipher,
-        iv_len: usize,
-        data: &[u8],
-    ) -> anyhow::Result<Vec<u8>> {
         let mut out = vec![0u8; data.len() - iv_len + cipher.block_size()];
         let iv = &data[0..iv_len];
 
@@ -290,20 +286,6 @@ impl EspCodec {
         let pad_len = out[out.len() - 2] as usize;
         out.truncate(out.len() - pad_len - 2);
         Ok(out)
-    }
-
-    fn decrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let iv_len = match params.transform_id {
-            TransformId::Esp3Des => 8,
-            TransformId::EspAesCbc => 16,
-            _ => anyhow::bail!("Unsupported encryption algorithm"),
-        };
-        self.do_decrypt(
-            params,
-            CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into(),
-            iv_len,
-            data,
-        )
     }
 }
 
