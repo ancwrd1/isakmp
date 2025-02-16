@@ -69,7 +69,10 @@ impl CipherType {
                 32 => Ok(Self::Aes256Cbc),
                 _ => Err(anyhow!("Unsupported key len: {}", key_len)),
             },
-            IkeEncryptionAlgorithm::DesEde3Cbc => Ok(Self::DesEde3Cbc),
+            IkeEncryptionAlgorithm::DesEde3Cbc => match key_len {
+                24 => Ok(Self::DesEde3Cbc),
+                _ => Err(anyhow!("Unsupported key len: {}", key_len)),
+            },
             _ => Err(anyhow!("Unsupported encryption algorithm: {:?}", enc_alg)),
         }
     }

@@ -533,7 +533,7 @@ impl Ikev1Service {
         debug!("Negotiated SA encryption algorithm: {:?}", enc_alg);
 
         let key_len = if enc_alg == IkeEncryptionAlgorithm::DesEde3Cbc {
-            0
+            24
         } else {
             attributes
                 .iter()
