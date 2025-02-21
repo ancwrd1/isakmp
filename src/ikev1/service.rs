@@ -632,7 +632,7 @@ impl Ikev1Service {
     ) -> anyhow::Result<Option<(AttributesPayload, u32)>> {
         debug!("Begin identity protection");
 
-        let request = self.build_id_protection(identity_request.auth_blob)?;
+        let request = self.build_id_protection(Bytes::copy_from_slice(identity_request.auth_blob.as_bytes()))?;
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 

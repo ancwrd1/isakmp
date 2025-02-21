@@ -148,7 +148,7 @@ impl Pkcs8Certificate {
 
         Ok(Self {
             pkey,
-            certs: CertList(stack.into_iter().map(Into::into).collect()),
+            certs: CertList(stack.into_iter().collect()),
         })
     }
 }

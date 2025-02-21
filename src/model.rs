@@ -947,7 +947,7 @@ pub struct EspProposal {
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct IdentityRequest {
-    pub auth_blob: Bytes,
+    pub auth_blob: String,
     pub verify_certs: bool,
     pub ca_certs: Vec<PathBuf>,
     pub with_mfa: bool,

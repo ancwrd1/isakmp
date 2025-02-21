@@ -25,7 +25,7 @@ use isakmp::{
     transport::{TcptDataType, UdpTransport},
 };
 
-const CP_AUTH_BLOB: &[u8] = b"(\n\
+const CP_AUTH_BLOB: &str = "(\n\
                :clientType (TRAC)\n\
                :clientOS (Windows_7)\n\
                :oldSessionId ()\n\
@@ -241,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
     let identity_request = IdentityRequest {
-        auth_blob: Bytes::from_static(CP_AUTH_BLOB),
+        auth_blob: CP_AUTH_BLOB.to_string(),
         verify_certs,
         ca_certs,
         with_mfa: matches!(identity, Identity::None),
