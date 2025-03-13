@@ -97,6 +97,32 @@ impl Decoder for TcptTransportCodec {
     }
 }
 
+#[async_trait]
+pub trait TcptHandshaker {
+    async fn handshake(&mut self, data_type: TcptDataType) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+impl TcptHandshaker for TcpStream {
+    async fn handshake(&mut self, data_type: TcptDataType) -> anyhow::Result<()> {
+        let mut framed = TcptTransportCodec::new(TcptDataType::Cmd).framed(self);
+
+        let mut data = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+        data[4..8].copy_from_slice(&data_type.as_u32().to_be_bytes());
+
+        framed.send(Bytes::copy_from_slice(&data)).await?;
+
+        let data = tokio::time::timeout(HANDSHAKE_TIMEOUT, framed.next())
+            .await?
+            .context("No data")??;
+
+        match data.last() {
+            Some(1) => Ok(()),
+            _ => anyhow::bail!("Handshake failed for {:?}", data_type),
+        }
+    }
+}
+
 pub struct TcptTransport {
     address: SocketAddr,
     codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
@@ -125,32 +151,13 @@ impl TcptTransport {
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(self.address)).await??;
 
                 debug!("Connected, starting TCPT handshake");
-                handshake(self.data_type, &mut stream).await?;
+                stream.handshake(self.data_type).await?;
 
                 self.stream = Some(stream);
                 Ok(self.stream.as_mut().unwrap())
             }
         }
     }
-}
-
-pub async fn handshake(data_type: TcptDataType, stream: &mut TcpStream) -> anyhow::Result<()> {
-    let mut framed = TcptTransportCodec::new(TcptDataType::Cmd).framed(stream);
-
-    let mut data = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
-    data[4..8].copy_from_slice(&data_type.as_u32().to_be_bytes());
-
-    framed.send(Bytes::copy_from_slice(&data)).await?;
-
-    let data = tokio::time::timeout(HANDSHAKE_TIMEOUT, framed.next())
-        .await?
-        .context("No data")??;
-
-    if data.last() != Some(&1) {
-        anyhow::bail!("Handshake failed");
-    }
-
-    Ok(())
 }
 
 async fn do_send(data_type: TcptDataType, stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
