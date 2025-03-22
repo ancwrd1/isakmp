@@ -3,9 +3,11 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::sink::SinkExt;
-use futures::StreamExt;
-use tokio::{io::Interest, net::TcpStream};
+use futures::{sink::SinkExt, StreamExt};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, Interest},
+    net::TcpStream,
+};
 use tokio_util::codec::{Decoder, Encoder};
 
 use tracing::{debug, trace};
@@ -103,7 +105,10 @@ pub trait TcptHandshaker {
 }
 
 #[async_trait]
-impl TcptHandshaker for TcpStream {
+impl<T> TcptHandshaker for T
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
     async fn handshake(&mut self, data_type: TcptDataType) -> anyhow::Result<()> {
         let mut framed = TcptTransportCodec::new(TcptDataType::Cmd).framed(self);
 
