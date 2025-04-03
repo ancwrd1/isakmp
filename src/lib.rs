@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+#![allow(clippy::manual_repeat_n)]
 
 pub mod certs;
 pub mod crypto;
