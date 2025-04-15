@@ -19,9 +19,9 @@ use tracing_subscriber::EnvFilter;
 
 use isakmp::{
     ikev1::{service::Ikev1Service, session::Ikev1Session},
-    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest, IkeAttributeType},
+    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest},
     payload::AttributesPayload,
-    session::{IsakmpSession, OfficeMode},
+    session::{IsakmpSession, OfficeMode, SessionType},
     transport::{TcptDataType, UdpTransport},
 };
 
@@ -104,7 +104,7 @@ async fn do_challenge_attr(
     };
 
     Ok(ikev1
-        .send_auth_attribute(
+        .send_attribute(
             identifier,
             message_id,
             ConfigAttributeType::UserPassword,
@@ -127,7 +127,7 @@ async fn do_user_name(
     stdin().read_line(&mut username)?;
 
     Ok(ikev1
-        .send_auth_attribute(
+        .send_attribute(
             identifier,
             message_id,
             attr_type,
@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     let identity = match args.get(2).map(|s| s.as_str()) {
         Some("pkcs12") => match args.get(3) {
             Some(arg) => Identity::Pkcs12 {
-                path: arg.into(),
+                data: std::fs::read(arg)?,
                 password: args.get(4).map(|s| s.as_str()).unwrap_or_default().to_owned(),
             },
             None => return Err(anyhow!("Missing pkcs12 file path")),
@@ -208,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
 
     let my_addr = util::get_default_ip().await?.parse::<Ipv4Addr>()?;
 
-    let session = Ikev1Session::new(identity.clone())?;
+    let session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
 
     let socket_address = format!("{address}:443")
         .to_socket_addrs()?
@@ -223,20 +223,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
-    let attributes = service.do_sa_proposal(Duration::from_secs(120)).await?;
+    let proposal = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
-    let lifetime = attributes
-        .iter()
-        .find_map(|a| match IkeAttributeType::from(a.attribute_type) {
-            IkeAttributeType::LifeDuration => a.as_long().and_then(|v| {
-                let data: Option<[u8; 4]> = v.as_ref().try_into().ok();
-                data.map(u32::from_be_bytes)
-            }),
-            _ => None,
-        })
-        .context("No lifetime in reply!")?;
-
-    println!("IKE lifetime: {lifetime}");
+    println!("SA proposal: {proposal:?}");
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
@@ -247,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
         with_mfa: matches!(identity, Identity::None),
     };
 
-    if let Some((mut auth_attrs, message_id)) = service.do_identity_protection(identity_request).await? {
+    if let (Some(mut auth_attrs), message_id) = service.do_identity_protection(identity_request).await? {
         let status = loop {
             auth_attrs = handle_auth_reply(&mut service, auth_attrs, message_id).await?;
             println!("{auth_attrs:#?}");
@@ -343,7 +332,7 @@ async fn main() -> anyhow::Result<()> {
     let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
     udp.connect(format!("{address}:500")).await?;
 
-    let mut session = Ikev1Session::new(identity.clone())?;
+    let mut session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
     let office_mode = session.load(&saved)?;
     println!("Loaded office mode: {:#?}", office_mode);
 

@@ -1,4 +1,4 @@
-use std::{io::Read, path::PathBuf};
+use std::{io::Read, path::PathBuf, time::Duration};
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -902,7 +902,7 @@ pub enum Identity {
     #[default]
     None,
     Pkcs12 {
-        path: PathBuf,
+        data: Vec<u8>,
         password: String,
     },
     Pkcs8 {
@@ -926,12 +926,14 @@ pub struct EspCryptMaterial {
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct SaProposal {
+    pub cookie_i: u64,
     pub cookie_r: u64,
     pub sa_bytes: Bytes,
     pub hash_alg: IkeHashAlgorithm,
     pub enc_alg: IkeEncryptionAlgorithm,
     pub key_len: usize,
     pub group: IkeGroupDescription,
+    pub lifetime: Duration,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]

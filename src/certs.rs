@@ -10,6 +10,7 @@ use cryptoki::{
     types::AuthPin,
 };
 use openssl::{
+    hash::MessageDigest,
     pkcs12::Pkcs12,
     pkey::{PKey, Private},
     rsa::Padding,
@@ -30,6 +31,8 @@ pub trait ClientCertificate {
     fn subject(&self) -> Bytes;
 
     fn subject_name(&self) -> String;
+
+    fn fingerprint(&self) -> Bytes;
 
     fn certs(&self) -> Vec<Bytes>;
 
@@ -82,7 +85,7 @@ impl CertList {
         }
     }
 
-    fn issuer(&self) -> Bytes {
+    pub fn issuer(&self) -> Bytes {
         self.0
             .first()
             .and_then(|c| c.issuer_name().to_der().ok())
@@ -90,14 +93,14 @@ impl CertList {
             .into()
     }
 
-    fn issuer_name(&self) -> String {
+    pub fn issuer_name(&self) -> String {
         self.0
             .first()
             .map(|c| format_x509_name(c.issuer_name()))
             .unwrap_or_default()
     }
 
-    fn subject(&self) -> Bytes {
+    pub fn subject(&self) -> Bytes {
         self.0
             .first()
             .and_then(|c| c.subject_name().to_der().ok())
@@ -105,27 +108,37 @@ impl CertList {
             .into()
     }
 
-    fn subject_name(&self) -> String {
+    pub fn subject_name(&self) -> String {
         self.0
             .first()
             .map(|c| format_x509_name(c.subject_name()))
             .unwrap_or_default()
     }
 
-    fn certs(&self) -> Vec<Bytes> {
+    pub fn fingerprint(&self) -> Bytes {
+        self.0
+            .first()
+            .map(|c| {
+                c.digest(MessageDigest::sha1())
+                    .map(|d| d.to_vec().into())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn certs(&self) -> Vec<Bytes> {
         self.0.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
     }
 }
 
-pub(crate) struct Pkcs8Certificate {
+pub struct Pkcs8Certificate {
     pkey: PKey<Private>,
     certs: CertList,
 }
 
 impl Pkcs8Certificate {
-    pub fn from_pkcs12(path: &Path, password: &str) -> anyhow::Result<Self> {
-        let data = std::fs::read(path)?;
-        let pkcs12 = Pkcs12::from_der(&data)?;
+    pub fn from_pkcs12(data: &[u8], password: &str) -> anyhow::Result<Self> {
+        let pkcs12 = Pkcs12::from_der(data)?;
         let parsed = pkcs12.parse2(password)?;
         if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
             let mut certs = vec![cert];
@@ -168,6 +181,10 @@ impl ClientCertificate for Pkcs8Certificate {
 
     fn subject_name(&self) -> String {
         self.certs.subject_name()
+    }
+
+    fn fingerprint(&self) -> Bytes {
+        self.certs.fingerprint()
     }
 
     fn certs(&self) -> Vec<Bytes> {
@@ -260,6 +277,10 @@ impl ClientCertificate for Pkcs11Certificate {
 
     fn subject_name(&self) -> String {
         self.certs.subject_name()
+    }
+
+    fn fingerprint(&self) -> Bytes {
+        self.certs.fingerprint()
     }
 
     fn certs(&self) -> Vec<Bytes> {

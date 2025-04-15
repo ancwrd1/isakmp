@@ -1,5 +1,4 @@
-use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::{net::Ipv4Addr, sync::Arc};
 
 use crate::{
     certs::ClientCertificate,
@@ -8,6 +7,13 @@ use crate::{
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+
+#[derive(Default, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum SessionType {
+    #[default]
+    Initiator,
+    Responder,
+}
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SessionKeys {

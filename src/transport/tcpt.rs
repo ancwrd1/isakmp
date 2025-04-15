@@ -129,7 +129,7 @@ where
 }
 
 pub struct TcptTransport {
-    address: SocketAddr,
+    address: Option<SocketAddr>,
     codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
     stream: Option<TcpStream>,
     data_type: TcptDataType,
@@ -138,22 +138,35 @@ pub struct TcptTransport {
 impl TcptTransport {
     pub fn new(data_type: TcptDataType, address: SocketAddr, codec: Box<dyn IsakmpMessageCodec + Send + Sync>) -> Self {
         Self {
-            address,
+            address: Some(address),
             codec,
             stream: None,
             data_type,
         }
     }
 
+    pub fn with_stream(
+        data_type: TcptDataType,
+        stream: TcpStream,
+        codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
+    ) -> Self {
+        Self {
+            address: None,
+            codec,
+            stream: Some(stream),
+            data_type,
+        }
+    }
+
     async fn get_stream(&mut self) -> anyhow::Result<&mut TcpStream> {
-        match self.stream.take() {
-            Some(stream) if stream.ready(Interest::READABLE | Interest::WRITABLE).await.is_ok() => {
+        match (self.stream.take(), self.address) {
+            (Some(stream), _) if stream.ready(Interest::READABLE | Interest::WRITABLE).await.is_ok() => {
                 self.stream = Some(stream);
                 Ok(self.stream.as_mut().unwrap())
             }
-            _ => {
-                debug!("Connecting to {}", self.address);
-                let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(self.address)).await??;
+            (None, Some(address)) => {
+                debug!("Connecting to {}", address);
+                let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await??;
 
                 debug!("Connected, starting TCPT handshake");
                 stream.handshake(self.data_type).await?;
@@ -161,6 +174,7 @@ impl TcptTransport {
                 self.stream = Some(stream);
                 Ok(self.stream.as_mut().unwrap())
             }
+            _ => anyhow::bail!("Transport disconnected"),
         }
     }
 }

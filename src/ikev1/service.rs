@@ -377,7 +377,7 @@ impl Ikev1Service {
         })
     }
 
-    fn build_auth_attr(
+    fn build_attribute_request(
         &self,
         identifier: u16,
         message_id: u32,
@@ -466,7 +466,7 @@ impl Ikev1Service {
         })
     }
 
-    fn make_hash_from_payloads(&self, message_id: u32, payloads: &[&Payload]) -> anyhow::Result<Payload> {
+    pub fn make_hash_from_payloads(&self, message_id: u32, payloads: &[&Payload]) -> anyhow::Result<Payload> {
         let mut buf = BytesMut::new();
         for (i, payload) in payloads.iter().enumerate() {
             let data = payload.to_bytes();
@@ -486,20 +486,30 @@ impl Ikev1Service {
         Ok(Payload::Hash(BasicPayload::new(hash)))
     }
 
-    pub async fn do_sa_proposal(&mut self, lifetime: Duration) -> anyhow::Result<Vec<DataAttribute>> {
+    pub async fn do_sa_proposal(&mut self, lifetime: Duration) -> anyhow::Result<SaProposal> {
         debug!("Begin SA proposal");
 
         let request = self.build_ike_sa(lifetime)?;
-        let sa_bytes = request.payloads[0].to_bytes();
+        let (proposal, _) = self.send_sa_proposal(request).await?;
 
-        let response = self.transport.send_receive(&request, self.socket_timeout).await?;
+        self.session.init_from_sa(proposal.clone())?;
+
+        debug!("End SA proposal");
+
+        Ok(proposal)
+    }
+
+    pub async fn send_sa_proposal(&mut self, message: IsakmpMessage) -> anyhow::Result<(SaProposal, IsakmpMessage)> {
+        let sa_bytes = message.payloads[0].to_bytes();
+
+        let response = self.transport.send_receive(&message, self.socket_timeout).await?;
 
         let attributes = response
             .payloads
-            .into_iter()
+            .iter()
             .find_map(|p| match p {
-                Payload::SecurityAssociation(payload) => payload.payloads.into_iter().find_map(|p| match p {
-                    Payload::Proposal(proposal) => proposal.transforms.into_iter().next().map(|t| t.attributes),
+                Payload::SecurityAssociation(payload) => payload.payloads.iter().find_map(|p| match p {
+                    Payload::Proposal(proposal) => proposal.transforms.iter().next().map(|t| t.attributes.clone()),
                     _ => None,
                 }),
                 _ => None,
@@ -562,19 +572,31 @@ impl Ikev1Service {
 
         debug!("Negotiated SA group: {:?}", group);
 
+        let lifetime = attributes
+            .iter()
+            .find_map(|a| match IkeAttributeType::from(a.attribute_type) {
+                IkeAttributeType::LifeDuration => a.as_long().and_then(|v| {
+                    let data: Option<[u8; 4]> = v.as_ref().try_into().ok();
+                    data.map(u32::from_be_bytes)
+                }),
+                _ => None,
+            })
+            .context("No lifetime in reply!")?;
+
+        debug!("Negotiated SA lifetime: {}", lifetime);
+
         let proposal = SaProposal {
+            cookie_i: response.cookie_i,
             cookie_r: response.cookie_r,
             sa_bytes,
             hash_alg,
             enc_alg,
             key_len,
             group,
+            lifetime: Duration::from_secs(lifetime as u64),
         };
-        self.session.init_from_sa(proposal)?;
 
-        debug!("End SA proposal");
-
-        Ok(attributes)
+        Ok((proposal, response))
     }
 
     pub async fn do_key_exchange(&mut self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<()> {
@@ -629,7 +651,7 @@ impl Ikev1Service {
     pub async fn do_identity_protection(
         &mut self,
         identity_request: IdentityRequest,
-    ) -> anyhow::Result<Option<(AttributesPayload, u32)>> {
+    ) -> anyhow::Result<(Option<AttributesPayload>, u32)> {
         debug!("Begin identity protection");
 
         let request = self.build_id_protection(Bytes::copy_from_slice(identity_request.auth_blob.as_bytes()))?;
@@ -688,9 +710,10 @@ impl Ikev1Service {
 
         let result = if identity_request.with_mfa {
             debug!("Awaiting authentication factors");
-            Ok(Some(self.get_auth_attributes().await?))
+            let (attrs, id) = self.get_auth_attributes().await?;
+            Ok((Some(attrs), id))
         } else {
-            Ok(None)
+            Ok((None, response.message_id))
         };
 
         debug!("End identity protection");
@@ -698,7 +721,7 @@ impl Ikev1Service {
         result
     }
 
-    pub async fn send_auth_attribute(
+    pub async fn send_attribute(
         &mut self,
         identifier: u16,
         message_id: u32,
@@ -712,10 +735,19 @@ impl Ikev1Service {
             timeout.map(|t| t.as_secs())
         );
 
-        let request = self.build_auth_attr(identifier, message_id, attribute_type, data)?;
+        let request = self.build_attribute_request(identifier, message_id, attribute_type, data)?;
+
+        self.send_attribute_message(request, timeout).await
+    }
+
+    pub async fn send_attribute_message(
+        &mut self,
+        message: IsakmpMessage,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<(AttributesPayload, u32)> {
         let response = self
             .transport
-            .send_receive(&request, timeout.unwrap_or(self.socket_timeout))
+            .send_receive(&message, timeout.unwrap_or(self.socket_timeout))
             .await?;
         let message_id = response.message_id;
         debug!("Message ID: {:04x}", message_id);
@@ -729,10 +761,11 @@ impl Ikev1Service {
 
     pub async fn send_ack_response(&mut self, identifier: u16, message_id: u32) -> anyhow::Result<()> {
         debug!("Sending ACK response");
-        let request = self.build_ack_cfg(identifier, message_id)?;
-        self.transport.send(&request).await?;
+        self.send_ack_message(self.build_ack_cfg(identifier, message_id)?).await
+    }
 
-        Ok(())
+    pub async fn send_ack_message(&mut self, msg: IsakmpMessage) -> anyhow::Result<()> {
+        self.transport.send(&msg).await
     }
 
     pub async fn send_om_request(&mut self) -> anyhow::Result<AttributesPayload> {

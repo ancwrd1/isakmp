@@ -6,7 +6,7 @@ use crate::{
     ikev1::codec::Ikev1Codec,
     message::IsakmpMessageCodec,
     model::*,
-    session::{EndpointData, IsakmpSession, OfficeMode, SessionKeys},
+    session::{EndpointData, IsakmpSession, OfficeMode, SessionKeys, SessionType},
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -18,8 +18,11 @@ use serde::{Deserialize, Serialize};
 pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
 
 impl Ikev1Session {
-    pub fn new(identity: Identity) -> anyhow::Result<Self> {
-        Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(identity)?))))
+    pub fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
+        Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(
+            identity,
+            session_type,
+        )?))))
     }
 }
 
@@ -124,6 +127,7 @@ struct Ikev1SessionStore {
 }
 
 struct Ikev1SessionImpl {
+    session_type: SessionType,
     crypto: Crypto,
     client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
     initiator: Arc<EndpointData>,
@@ -137,9 +141,9 @@ struct Ikev1SessionImpl {
 }
 
 impl Ikev1SessionImpl {
-    fn new(identity: Identity) -> anyhow::Result<Self> {
+    fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
         let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
-            Identity::Pkcs12 { path, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&path, &password)?)),
+            Identity::Pkcs12 { data, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&data, &password)?)),
             Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
             Identity::Pkcs11 {
                 driver_path,
@@ -151,15 +155,25 @@ impl Ikev1SessionImpl {
 
         let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, GroupType::Oakley2)?;
 
+        let (cookie_i, cookie_r) = match session_type {
+            SessionType::Initiator => (random(), 0),
+            SessionType::Responder => (0, random()),
+        };
+
         Ok(Self {
+            session_type,
             crypto,
             client_cert,
             initiator: Arc::new(EndpointData {
-                cookie: random(),
+                cookie: cookie_i,
                 nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
                 ..Default::default()
             }),
-            responder: Arc::default(),
+            responder: Arc::new(EndpointData {
+                cookie: cookie_r,
+                nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
+                ..Default::default()
+            }),
             session_keys: Arc::default(),
             iv: HashMap::default(),
             sa_bytes: Bytes::default(),
@@ -239,28 +253,58 @@ impl IsakmpSession for Ikev1SessionImpl {
 
         self.crypto = Crypto::with_parameters(digest, cipher, group)?;
 
-        self.responder = Arc::new(EndpointData {
-            cookie: proposal.cookie_r,
-            ..(*self.responder).clone()
-        });
+        match self.session_type {
+            SessionType::Initiator => {
+                self.responder = Arc::new(EndpointData {
+                    cookie: proposal.cookie_r,
+                    ..(*self.responder).clone()
+                });
 
-        self.initiator = Arc::new(EndpointData {
-            public_key: self.crypto.public_key(),
-            ..(*self.initiator).clone()
-        });
+                self.initiator = Arc::new(EndpointData {
+                    cookie: proposal.cookie_i,
+                    public_key: self.crypto.public_key(),
+                    ..(*self.initiator).clone()
+                });
+            }
+            SessionType::Responder => {
+                self.initiator = Arc::new(EndpointData {
+                    cookie: proposal.cookie_i,
+                    ..(*self.initiator).clone()
+                });
+
+                self.responder = Arc::new(EndpointData {
+                    cookie: proposal.cookie_r,
+                    public_key: self.crypto.public_key(),
+                    ..(*self.responder).clone()
+                });
+            }
+        }
 
         Ok(())
     }
 
     fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
-        self.responder = Arc::new(EndpointData {
-            public_key: public_key_r,
-            nonce: nonce_r,
-            ..(*self.responder).clone()
-        });
+        let key = match self.session_type {
+            SessionType::Initiator => {
+                self.responder = Arc::new(EndpointData {
+                    public_key: public_key_r,
+                    nonce: nonce_r,
+                    ..(*self.responder).clone()
+                });
+                &self.responder.public_key
+            }
+            SessionType::Responder => {
+                self.initiator = Arc::new(EndpointData {
+                    public_key: public_key_r,
+                    nonce: nonce_r,
+                    ..(*self.initiator).clone()
+                });
+                &self.initiator.public_key
+            }
+        };
 
         self.session_keys = Arc::new(SessionKeys {
-            shared_secret: self.crypto.shared_secret(&self.responder.public_key)?,
+            shared_secret: self.crypto.shared_secret(key)?,
             ..(*self.session_keys).clone()
         });
 
