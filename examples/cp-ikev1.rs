@@ -1,7 +1,6 @@
 use std::{
     io::{stdin, stdout, Write},
     net::{IpAddr, Ipv4Addr, ToSocketAddrs},
-    path::PathBuf,
     time::Duration,
 };
 
@@ -32,6 +31,8 @@ const CP_AUTH_BLOB: &str = "(\n\
                :protocolVersion (100)\n\
                :client_mode (endpoint_security)\n\
                :selected_realm_id (vpn_Azure_Authentication))";
+
+const CP_CA_FINGERPRINT: &str = "MATE FRED PEN RANK LIP HUGH BEAD WET CAGE DEW FULL EDIT";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
     static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
@@ -189,12 +190,6 @@ async fn main() -> anyhow::Result<()> {
         _ => Identity::None,
     };
 
-    let (verify_certs, ca_certs) = if matches!(args.get(2).map(|s| s.as_str()), Some("validate")) {
-        (true, vec![PathBuf::from(&args[3])])
-    } else {
-        (false, Vec::new())
-    };
-
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -231,9 +226,8 @@ async fn main() -> anyhow::Result<()> {
 
     let identity_request = IdentityRequest {
         auth_blob: CP_AUTH_BLOB.to_string(),
-        verify_certs,
-        ca_certs,
         with_mfa: matches!(identity, Identity::None),
+        internal_ca_fingerprints: vec![CP_CA_FINGERPRINT.to_string()],
     };
 
     if let (Some(mut auth_attrs), message_id) = service.do_identity_protection(identity_request).await? {

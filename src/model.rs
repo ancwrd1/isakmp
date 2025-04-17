@@ -1,4 +1,4 @@
-use std::{io::Read, path::PathBuf, time::Duration};
+use std::{fmt, io::Read, path::PathBuf, time::Duration};
 
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -936,6 +936,20 @@ pub struct SaProposal {
     pub lifetime: Duration,
 }
 
+impl fmt::Display for SaProposal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SaProposal")
+            .field("cookie_i", &self.cookie_i)
+            .field("cookie_r", &self.cookie_r)
+            .field("hash_alg", &self.sa_bytes)
+            .field("enc_alg", &self.enc_alg)
+            .field("key_len", &self.key_len)
+            .field("group", &self.group)
+            .field("lifetime", &self.lifetime.as_secs())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct EspProposal {
     pub spi_i: u32,
@@ -950,7 +964,6 @@ pub struct EspProposal {
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct IdentityRequest {
     pub auth_blob: String,
-    pub verify_certs: bool,
-    pub ca_certs: Vec<PathBuf>,
+    pub internal_ca_fingerprints: Vec<String>,
     pub with_mfa: bool,
 }

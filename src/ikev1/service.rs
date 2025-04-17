@@ -3,10 +3,11 @@ use std::{net::Ipv4Addr, time::Duration};
 use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use itertools::iproduct;
+use itertools::{iproduct, Itertools};
 use rand::random;
 use tracing::{debug, trace};
 
+use crate::rfc1751::key_to_english;
 use crate::{
     certs::CertList, message::IsakmpMessage, model::*, payload::*, session::IsakmpSession, transport::IsakmpTransport,
 };
@@ -696,16 +697,23 @@ impl Ikev1Service {
             }
         }
 
-        if identity_request.verify_certs {
-            let mut ca_cert_vec = Vec::new();
+        let mut validation_result = false;
 
-            for cert in &identity_request.ca_certs {
-                let data = std::fs::read(cert)?;
-                ca_cert_vec.push(data.into());
+        for cert in certs {
+            let cert_list = CertList::from_ipsec(&[cert])?;
+            let fingerprint = key_to_english(&cert_list.fingerprint()[0..16])?.join(" ");
+
+            debug!("Trying fingerprint for {}: {}", cert_list.subject_name(), fingerprint);
+
+            if identity_request.internal_ca_fingerprints.iter().contains(&fingerprint) {
+                debug!("Internal IPSec certificate validation succeeded");
+                validation_result = true;
+                break;
             }
-            let cert_list = CertList::from_ipsec(&certs)?;
+        }
 
-            cert_list.verify(&ca_cert_vec)?;
+        if !validation_result {
+            anyhow::bail!("Internal IPSec certificate validation failed!");
         }
 
         let result = if identity_request.with_mfa {
