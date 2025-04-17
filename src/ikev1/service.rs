@@ -332,7 +332,7 @@ impl Ikev1Service {
         let notify_payload = Payload::Notification(NotificationPayload {
             doi: 0,
             protocol_id: ProtocolId::Isakmp,
-            message_type: NotifyMessageType::CccAuth.into(),
+            message_type: NotifyMessageType::CccAuth,
             spi: self
                 .session
                 .cookie_i()
@@ -510,7 +510,7 @@ impl Ikev1Service {
             .iter()
             .find_map(|p| match p {
                 Payload::SecurityAssociation(payload) => payload.payloads.iter().find_map(|p| match p {
-                    Payload::Proposal(proposal) => proposal.transforms.iter().next().map(|t| t.attributes.clone()),
+                    Payload::Proposal(proposal) => proposal.transforms.first().map(|t| t.attributes.clone()),
                     _ => None,
                 }),
                 _ => None,
@@ -678,32 +678,21 @@ impl Ikev1Service {
             })
             .collect::<Vec<_>>();
 
-        match (signature, id, &certs[..]) {
-            (Some(signature), Some(id), [cert, ..]) => {
-                let id_type = IdentityType::from(id.id_type);
-                if id_type == IdentityType::Ipv4Address {
-                    let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
-                    debug!("IP address from ID payload: {}", id_addr);
-                }
+        let (Some(signature), Some(id), [cert, ..]) = (signature, id, &certs[..]) else {
+            anyhow::bail!("Incomplete ID payload received!");
+        };
 
-                let data = id.to_bytes();
-                let hash = self.session.hash_id_r(&data)?;
-                self.session().verify_signature(&hash, &signature, cert)?;
-
-                debug!("ID payload signature verification succeeded!");
-            }
-            _ => {
-                anyhow::bail!("Incomplete ID payload received!");
-            }
+        for fp in &identity_request.internal_ca_fingerprints {
+            debug!("Trusted server fingerprint: {}", fp);
         }
 
         let mut validation_result = false;
 
-        for cert in certs {
+        for cert in &certs {
             let cert_list = CertList::from_ipsec(&[cert])?;
             let fingerprint = key_to_english(&cert_list.fingerprint()[0..16])?.join(" ");
 
-            debug!("Trying fingerprint for {}: {}", cert_list.subject_name(), fingerprint);
+            debug!("Fingerprint for: {}: {}", cert_list.subject_name(), fingerprint);
 
             if identity_request.internal_ca_fingerprints.iter().contains(&fingerprint) {
                 debug!("Internal IPSec certificate validation succeeded");
@@ -715,6 +704,18 @@ impl Ikev1Service {
         if !validation_result {
             anyhow::bail!("Internal IPSec certificate validation failed!");
         }
+
+        let id_type = IdentityType::from(id.id_type);
+        if id_type == IdentityType::Ipv4Address {
+            let id_addr: Ipv4Addr = id.data.clone().reader().read_u32::<BigEndian>()?.into();
+            debug!("IP address from ID payload: {}", id_addr);
+        }
+
+        let data = id.to_bytes();
+        let hash = self.session.hash_id_r(&data)?;
+        self.session().verify_signature(&hash, &signature, cert)?;
+
+        debug!("ID payload signature verification succeeded!");
 
         let result = if identity_request.with_mfa {
             debug!("Awaiting authentication factors");

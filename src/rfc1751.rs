@@ -1,3 +1,31 @@
+#[inline]
+pub fn bin2num(v: &[u8]) -> u16 {
+    v.iter().fold(0, |sum, v| sum * 2 + (*v as u16 - 48))
+}
+
+pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<&'static str>> {
+    let mut result = Vec::new();
+
+    if key.len() % 8 != 0 {
+        anyhow::bail!("Invalid key length");
+    }
+
+    for subkey in key.chunks(8) {
+        let mut subkey_bin = subkey.iter().map(|b| format!("{:08b}", b)).collect::<String>();
+
+        let checksum = subkey_bin.as_bytes().chunks(2).fold(0, |sum, v| sum + bin2num(v));
+
+        subkey_bin.push_str(&format!("{:08b}", (checksum << 6) & 255));
+
+        for chunk11 in subkey_bin.as_bytes().chunks_exact(11) {
+            let num = bin2num(chunk11);
+            result.push(WORDLIST[num as usize]);
+        }
+    }
+
+    Ok(result)
+}
+
 const WORDLIST: &[&str] = &[
     "A", "ABE", "ACE", "ACT", "AD", "ADA", "ADD", "AGO", "AID", "AIM", "AIR", "ALL", "ALP", "AM", "AMY", "AN", "ANA",
     "AND", "ANN", "ANT", "ANY", "APE", "APS", "APT", "ARC", "ARE", "ARK", "ARM", "ART", "AS", "ASH", "ASK", "AT",
@@ -141,33 +169,6 @@ const WORDLIST: &[&str] = &[
     "WOLF", "WONT", "WOOD", "WOOL", "WORD", "WORE", "WORK", "WORM", "WORN", "WOVE", "WRIT", "WYNN", "YALE", "YANG",
     "YANK", "YARD", "YARN", "YAWL", "YAWN", "YEAH", "YEAR", "YELL", "YOGA", "YOKE",
 ];
-
-pub fn bin2num(v: &[u8]) -> u16 {
-    v.iter().fold(0, |sum, v| sum * 2 + (*v as u16 - 48))
-}
-
-pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<String>> {
-    let mut result = Vec::new();
-
-    if key.len() % 8 != 0 {
-        anyhow::bail!("Invalid key length");
-    }
-
-    for subkey in key.chunks(8) {
-        let mut subkey_bin = subkey.iter().map(|b| format!("{:08b}", b)).collect::<String>();
-
-        let checksum = subkey_bin.as_bytes().chunks(2).fold(0, |sum, v| sum + bin2num(v));
-
-        subkey_bin.push_str(&format!("{:08b}", (checksum << 6) & 255));
-
-        for chunk11 in subkey_bin.as_bytes().chunks_exact(11) {
-            let num = bin2num(chunk11);
-            result.push(WORDLIST[num as usize].to_owned());
-        }
-    }
-
-    Ok(result)
-}
 
 #[cfg(test)]
 mod tests {

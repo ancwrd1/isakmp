@@ -7,6 +7,7 @@ use crate::{message::IsakmpMessage, model::ExchangeType, payload::Payload};
 pub mod tcpt;
 mod udp;
 
+use crate::model::NotifyMessageType;
 pub use tcpt::{TcptDataType, TcptTransport};
 pub use udp::UdpTransport;
 
@@ -14,10 +15,10 @@ fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
     if msg.exchange_type == ExchangeType::Informational {
         for payload in &msg.payloads {
             if let Payload::Notification(notify) = payload {
-                if notify.message_type == 31 || notify.message_type == 9101 {
+                if matches!(notify.message_type, NotifyMessageType::Other(31 | 37 | 9101)) {
                     anyhow::bail!(String::from_utf8_lossy(&notify.data).into_owned());
-                } else if notify.message_type < 31 {
-                    anyhow::bail!("IKE notify error {}", notify.message_type);
+                } else if notify.message_type < 31.into() {
+                    anyhow::bail!("IKE notify error {:?}", notify.message_type);
                 }
             }
         }

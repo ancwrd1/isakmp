@@ -6,8 +6,8 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tracing::trace;
 
 use crate::model::{
-    AttributesPayloadType, CertificateType, DataAttribute, PayloadType, ProtocolId, Situation, SituationData,
-    SituationFlags, TransformId,
+    AttributesPayloadType, CertificateType, DataAttribute, NotifyMessageType, PayloadType, ProtocolId, Situation,
+    SituationData, SituationFlags, TransformId,
 };
 
 pub trait PayloadLike: Sized {
@@ -224,7 +224,7 @@ impl PayloadLike for ProposalPayload {
 pub struct NotificationPayload {
     pub doi: u32,
     pub protocol_id: ProtocolId,
-    pub message_type: u16,
+    pub message_type: NotifyMessageType,
     pub spi: Bytes,
     pub data: Bytes,
 }
@@ -236,7 +236,7 @@ impl PayloadLike for NotificationPayload {
         buf.put_u32(self.doi);
         buf.put_u8(self.protocol_id.into());
         buf.put_u8(self.spi.len() as u8);
-        buf.put_u16(self.message_type);
+        buf.put_u16(self.message_type.into());
         buf.put_slice(&self.spi);
         buf.put_slice(&self.data);
 
@@ -259,7 +259,7 @@ impl PayloadLike for NotificationPayload {
         Ok(Self {
             doi,
             protocol_id,
-            message_type,
+            message_type: message_type.into(),
             spi: spi_data.into(),
             data: data.into(),
         })

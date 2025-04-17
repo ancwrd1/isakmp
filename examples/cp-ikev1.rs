@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
 
     let proposal = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
-    println!("SA proposal: {proposal:?}");
+    println!("SA proposal: {proposal}");
 
     service.do_key_exchange(my_addr, gateway_addr).await?;
 

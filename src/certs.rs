@@ -46,7 +46,7 @@ fn format_x509_name(name: &X509NameRef) -> String {
 pub struct CertList(Vec<X509>);
 
 impl CertList {
-    pub fn from_ipsec(certs: &[Bytes]) -> anyhow::Result<Self> {
+    pub fn from_ipsec(certs: &[&Bytes]) -> anyhow::Result<Self> {
         let mut x509_list = Vec::new();
         for cert in certs {
             x509_list.push(from_der_or_pem(cert)?);
