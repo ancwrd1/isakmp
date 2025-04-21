@@ -686,23 +686,28 @@ impl Ikev1Service {
             debug!("Trusted server fingerprint: {}", fp);
         }
 
-        let mut validation_result = false;
+        if identity_request.internal_ca_fingerprints.is_empty() {
+            debug!("No internal CA fingerprints specified, skipping validation");
+        } else {
+            let mut validation_result = false;
 
-        for cert in &certs {
-            let cert_list = CertList::from_ipsec(&[cert])?;
-            let fingerprint = key_to_english(&cert_list.fingerprint()[0..16])?.join(" ");
+            for cert in &certs {
+                let cert_list = CertList::from_ipsec(&[cert])?;
+                let fingerprint = key_to_english(&cert_list.fingerprint()[0..16])?.join(" ");
 
-            debug!("Fingerprint for: {}: {}", cert_list.subject_name(), fingerprint);
+                debug!("Fingerprint for: {}: {}", cert_list.subject_name(), fingerprint);
 
-            if identity_request.internal_ca_fingerprints.iter().contains(&fingerprint) {
-                debug!("Internal IPSec certificate validation succeeded");
-                validation_result = true;
-                break;
+                if identity_request.internal_ca_fingerprints.iter().contains(&fingerprint) {
+                    validation_result = true;
+                    break;
+                }
             }
-        }
 
-        if !validation_result {
-            anyhow::bail!("Internal IPSec certificate validation failed!");
+            if validation_result {
+                debug!("Internal IPSec certificate validation succeeded");
+            } else {
+                anyhow::bail!("Internal IPSec certificate validation failed!");
+            }
         }
 
         let id_type = IdentityType::from(id.id_type);
