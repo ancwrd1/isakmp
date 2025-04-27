@@ -3,7 +3,7 @@ use std::{net::Ipv4Addr, time::Duration};
 use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use itertools::{iproduct, Itertools};
+use itertools::{Itertools, iproduct};
 use rand::random;
 use tracing::{debug, trace};
 
@@ -63,9 +63,7 @@ impl Ikev1Service {
             for (auth, key_len, group) in proposals {
                 trace!(
                     "Adding SA transform: auth={:?} key_len={} group={:?}",
-                    auth,
-                    key_len,
-                    group
+                    auth, key_len, group
                 );
 
                 let mut attributes = vec![
@@ -160,10 +158,7 @@ impl Ikev1Service {
             for (auth, encap, key_len) in proposals {
                 trace!(
                     "Adding ESP transform: id={:?} auth={:?} encap={:?} key_len={}",
-                    transform_id,
-                    auth,
-                    encap,
-                    key_len
+                    transform_id, auth, encap, key_len
                 );
 
                 let mut attributes = vec![

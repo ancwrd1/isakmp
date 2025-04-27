@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    certs::{ClientCertificate, Pkcs11Certificate, Pkcs8Certificate},
+    certs::{ClientCertificate, Pkcs8Certificate, Pkcs11Certificate},
     crypto::{CipherType, Crypto, DigestType, GroupType},
     ikev1::codec::Ikev1Codec,
     message::IsakmpMessageCodec,

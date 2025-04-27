@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use cryptoki::{
     context::{CInitializeArgs, Pkcs11},
@@ -15,7 +15,7 @@ use openssl::{
     pkey::{PKey, Private},
     rsa::Padding,
     stack::Stack,
-    x509::{store::X509StoreBuilder, X509NameRef, X509StoreContext, X509},
+    x509::{X509, X509NameRef, X509StoreContext, store::X509StoreBuilder},
 };
 use tracing::{debug, trace};
 

@@ -3,7 +3,7 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::{sink::SinkExt, StreamExt};
+use futures::{StreamExt, sink::SinkExt};
 use tokio::{
     io::{AsyncRead, AsyncWrite, Interest},
     net::TcpStream,
@@ -14,7 +14,7 @@ use tracing::{debug, trace};
 
 use crate::{
     message::{IsakmpMessage, IsakmpMessageCodec},
-    transport::{check_informational, IsakmpTransport},
+    transport::{IsakmpTransport, check_informational},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

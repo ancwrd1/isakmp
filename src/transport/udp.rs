@@ -5,13 +5,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::{
     net::UdpSocket,
-    sync::mpsc::{channel, Receiver},
+    sync::mpsc::{Receiver, channel},
 };
 use tracing::{debug, trace};
 
 use crate::{
     message::{IsakmpMessage, IsakmpMessageCodec},
-    transport::{check_informational, IsakmpTransport},
+    transport::{IsakmpTransport, check_informational},
 };
 
 const NATT_PORT: u16 = 4500;

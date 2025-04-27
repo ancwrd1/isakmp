@@ -1,10 +1,10 @@
 use std::{
-    io::{stdin, stdout, Write},
+    io::{Write, stdin, stdout},
     net::{IpAddr, Ipv4Addr, ToSocketAddrs},
     time::Duration,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
 use once_cell::sync::Lazy;
