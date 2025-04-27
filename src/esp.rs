@@ -3,8 +3,8 @@ use std::{
     iter,
     net::Ipv4Addr,
     sync::{
-        atomic::{AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicU32, Ordering},
     },
     time::Duration,
 };
@@ -22,10 +22,10 @@ use openssl::{
 use pnet_macros::Packet;
 use pnet_macros_support::types::u32be;
 use pnet_packet::{
-    ip::IpNextHeaderProtocols,
-    ipv4::{checksum, Ipv4Packet, MutableIpv4Packet},
-    udp::{MutableUdpPacket, UdpPacket},
     MutablePacket, Packet,
+    ip::IpNextHeaderProtocols,
+    ipv4::{Ipv4Packet, MutableIpv4Packet, checksum},
+    udp::{MutableUdpPacket, UdpPacket},
 };
 use rand::random;
 use tokio::time::Instant;
@@ -210,7 +210,7 @@ impl EspCodec {
 
         let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
         plain.extend(data);
-        plain.extend(iter::repeat(0).take(pad_len));
+        plain.extend(iter::repeat_n(0, pad_len));
         plain.push(pad_len as u8);
         plain.push(4); // next header: IPIP
 

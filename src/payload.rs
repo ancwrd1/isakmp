@@ -521,41 +521,41 @@ pub enum Payload {
 impl Payload {
     pub fn to_bytes(&self) -> Bytes {
         match self {
-            Payload::SecurityAssociation(ref p) => p.to_bytes(),
-            Payload::Proposal(ref p) => p.to_bytes(),
-            Payload::Notification(ref p) => p.to_bytes(),
-            Payload::Delete(ref p) => p.to_bytes(),
-            Payload::Transform(ref p) => p.to_bytes(),
-            Payload::VendorId(ref p)
-            | Payload::KeyExchange(ref p)
-            | Payload::Nonce(ref p)
-            | Payload::Hash(ref p)
-            | Payload::Natd(ref p)
-            | Payload::Signature(ref p) => p.to_bytes(),
-            Payload::Identification(ref p) => p.to_bytes(),
-            Payload::Certificate(ref p) | Payload::CertificateRequest(ref p) => p.to_bytes(),
-            Payload::Attributes(ref p) => p.to_bytes(),
+            Payload::SecurityAssociation(p) => p.to_bytes(),
+            Payload::Proposal(p) => p.to_bytes(),
+            Payload::Notification(p) => p.to_bytes(),
+            Payload::Delete(p) => p.to_bytes(),
+            Payload::Transform(p) => p.to_bytes(),
+            Payload::VendorId(p)
+            | Payload::KeyExchange(p)
+            | Payload::Nonce(p)
+            | Payload::Hash(p)
+            | Payload::Natd(p)
+            | Payload::Signature(p) => p.to_bytes(),
+            Payload::Identification(p) => p.to_bytes(),
+            Payload::Certificate(p) | Payload::CertificateRequest(p) => p.to_bytes(),
+            Payload::Attributes(p) => p.to_bytes(),
             Payload::Other(_, p) => p.to_bytes(),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            Payload::SecurityAssociation(ref p) => p.len(),
-            Payload::Proposal(ref p) => p.len(),
-            Payload::Notification(ref p) => p.len(),
-            Payload::Delete(ref p) => p.len(),
-            Payload::Transform(ref p) => p.len(),
-            Payload::VendorId(ref p)
-            | Payload::KeyExchange(ref p)
-            | Payload::Nonce(ref p)
-            | Payload::Hash(ref p)
-            | Payload::Natd(ref p)
-            | Payload::Signature(ref p) => p.len(),
-            Payload::Identification(ref p) => p.len(),
-            Payload::Certificate(ref p) | Payload::CertificateRequest(ref p) => p.len(),
-            Payload::Attributes(ref p) => p.len(),
-            Payload::Other(_, ref p) => p.len(),
+            Payload::SecurityAssociation(p) => p.len(),
+            Payload::Proposal(p) => p.len(),
+            Payload::Notification(p) => p.len(),
+            Payload::Delete(p) => p.len(),
+            Payload::Transform(p) => p.len(),
+            Payload::VendorId(p)
+            | Payload::KeyExchange(p)
+            | Payload::Nonce(p)
+            | Payload::Hash(p)
+            | Payload::Natd(p)
+            | Payload::Signature(p) => p.len(),
+            Payload::Identification(p) => p.len(),
+            Payload::Certificate(p) | Payload::CertificateRequest(p) => p.len(),
+            Payload::Attributes(p) => p.len(),
+            Payload::Other(_, p) => p.len(),
         }
     }
 

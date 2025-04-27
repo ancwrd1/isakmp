@@ -814,7 +814,7 @@ impl AttributeValue {
     pub fn len(&self) -> usize {
         match self {
             AttributeValue::Short(_) => 2,
-            AttributeValue::Long(ref v) => v.len(),
+            AttributeValue::Long(v) => v.len(),
         }
     }
     pub fn is_empty(&self) -> bool {
