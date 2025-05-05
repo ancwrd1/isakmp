@@ -36,6 +36,7 @@ pub struct EndpointData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OfficeMode {
     pub ccc_session: String,
+    pub username: String,
     pub ip_address: Ipv4Addr,
     pub netmask: Ipv4Addr,
     pub dns: Vec<Ipv4Addr>,

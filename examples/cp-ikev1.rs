@@ -310,6 +310,7 @@ async fn main() -> anyhow::Result<()> {
 
     let office_mode = OfficeMode {
         ccc_session,
+        username: "".to_string(),
         ip_address: ipv4addr,
         netmask,
         dns,
