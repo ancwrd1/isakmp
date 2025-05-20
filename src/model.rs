@@ -750,6 +750,10 @@ pub enum ConfigAttributeType {
     InternalDomainName,
     MacAddress,
     CccSessionId,
+    CccVariableLeaseTime,
+    CccOfficeModeAllowed,
+    CccConnectAllowed,
+
     Other(u16),
 }
 
@@ -773,6 +777,9 @@ impl From<ConfigAttributeType> for u16 {
             ConfigAttributeType::InternalDomainName => 0x4003,
             ConfigAttributeType::MacAddress => 0x4004,
             ConfigAttributeType::CccSessionId => 0x4045,
+            ConfigAttributeType::CccVariableLeaseTime => 0x4046,
+            ConfigAttributeType::CccOfficeModeAllowed => 0x4047,
+            ConfigAttributeType::CccConnectAllowed => 0x404c,
 
             ConfigAttributeType::Other(v) => v,
         }
@@ -799,6 +806,9 @@ impl From<u16> for ConfigAttributeType {
             0x4003 => ConfigAttributeType::InternalDomainName,
             0x4004 => ConfigAttributeType::MacAddress,
             0x4045 => ConfigAttributeType::CccSessionId,
+            0x4046 => ConfigAttributeType::CccVariableLeaseTime,
+            0x4047 => ConfigAttributeType::CccOfficeModeAllowed,
+            0x404c => ConfigAttributeType::CccConnectAllowed,
             v => ConfigAttributeType::Other(v),
         }
     }

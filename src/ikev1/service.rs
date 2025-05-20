@@ -430,6 +430,9 @@ impl Ikev1Service {
             ConfigAttributeType::AddressExpiry,
             ConfigAttributeType::InternalDomainName,
             ConfigAttributeType::CccSessionId,
+            ConfigAttributeType::CccVariableLeaseTime,
+            ConfigAttributeType::CccOfficeModeAllowed,
+            ConfigAttributeType::CccConnectAllowed,
         ];
 
         let attributes = empty_attrs
