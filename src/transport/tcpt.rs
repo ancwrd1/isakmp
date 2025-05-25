@@ -223,7 +223,6 @@ impl IsakmpTransport for TcptTransport {
     }
 
     fn disconnect(&mut self) {
-        debug!("Disconnected");
         self.stream = None;
     }
 }
