@@ -238,8 +238,11 @@ impl IsakmpSession for Ikev1SessionImpl {
         self.sa_bytes = proposal.sa_bytes;
 
         let digest = match proposal.hash_alg {
+            IkeHashAlgorithm::Md5 => DigestType::Md5,
             IkeHashAlgorithm::Sha => DigestType::Sha1,
             IkeHashAlgorithm::Sha256 => DigestType::Sha256,
+            IkeHashAlgorithm::Sha384 => DigestType::Sha384,
+            IkeHashAlgorithm::Sha512 => DigestType::Sha512,
             _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", proposal.hash_alg)),
         };
 

@@ -175,14 +175,20 @@ pub enum IkeHashAlgorithm {
     Sha,
     #[default]
     Sha256,
+    Sha384,
+    Sha512,
+    Md5,
     Other(u16),
 }
 
 impl From<u16> for IkeHashAlgorithm {
     fn from(value: u16) -> Self {
         match value {
+            1 => Self::Md5,
             2 => Self::Sha,
             4 => Self::Sha256,
+            5 => Self::Sha384,
+            6 => Self::Sha512,
             other => Self::Other(other),
         }
     }
@@ -191,8 +197,11 @@ impl From<u16> for IkeHashAlgorithm {
 impl From<IkeHashAlgorithm> for u16 {
     fn from(value: IkeHashAlgorithm) -> Self {
         match value {
+            IkeHashAlgorithm::Md5 => 1,
             IkeHashAlgorithm::Sha => 2,
             IkeHashAlgorithm::Sha256 => 4,
+            IkeHashAlgorithm::Sha384 => 5,
+            IkeHashAlgorithm::Sha512 => 6,
             IkeHashAlgorithm::Other(u) => u,
         }
     }

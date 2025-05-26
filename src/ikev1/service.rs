@@ -55,7 +55,13 @@ impl Ikev1Service {
             (IkeEncryptionAlgorithm::DesEde3Cbc, vec![0]),
         ] {
             let proposals = iproduct!(
-                [IkeHashAlgorithm::Sha256, IkeHashAlgorithm::Sha],
+                [
+                    IkeHashAlgorithm::Sha512,
+                    IkeHashAlgorithm::Sha384,
+                    IkeHashAlgorithm::Sha256,
+                    IkeHashAlgorithm::Sha,
+                    IkeHashAlgorithm::Md5
+                ],
                 key_lengths,
                 [IkeGroupDescription::Oakley14, IkeGroupDescription::Oakley2]
             );

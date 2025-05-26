@@ -39,15 +39,21 @@ const G14_P: &[u8] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DigestType {
+    Md5,
     Sha1,
     Sha256,
+    Sha384,
+    Sha512,
 }
 
 impl From<DigestType> for MessageDigest {
     fn from(value: DigestType) -> Self {
         match value {
+            DigestType::Md5 => MessageDigest::md5(),
             DigestType::Sha1 => MessageDigest::sha1(),
             DigestType::Sha256 => MessageDigest::sha256(),
+            DigestType::Sha384 => MessageDigest::sha384(),
+            DigestType::Sha512 => MessageDigest::sha512(),
         }
     }
 }

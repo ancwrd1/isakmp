@@ -27,7 +27,7 @@ pnet_macros = "0.35"
 pnet_macros_support = "0.35"
 
 [dev-dependencies]
-opener = "0.7"
+opener = "0.8"
 regex = "1"
 once_cell = "1"
 tokio = { version = "1", features = ["full"]}
