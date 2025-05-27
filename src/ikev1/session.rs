@@ -220,7 +220,7 @@ impl Ikev1SessionImpl {
         })
     }
 
-    pub fn retrieve_iv(&mut self, message_id: u32) -> Bytes {
+    fn retrieve_iv(&mut self, message_id: u32) -> Bytes {
         let zero_iv = self.iv[&0].clone();
         self.iv
             .entry(message_id)
@@ -231,9 +231,7 @@ impl Ikev1SessionImpl {
             })
             .clone()
     }
-}
 
-impl IsakmpSession for Ikev1SessionImpl {
     fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
         self.sa_bytes = proposal.sa_bytes;
 
@@ -541,9 +539,5 @@ impl IsakmpSession for Ikev1SessionImpl {
         };
 
         Ok(rmp_serde::to_vec(&store)?)
-    }
-
-    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
-        panic!("Not implemented");
     }
 }
