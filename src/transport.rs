@@ -7,9 +7,10 @@ use crate::{message::IsakmpMessage, model::ExchangeType, payload::Payload};
 pub mod tcpt;
 mod udp;
 
-use crate::model::NotifyMessageType;
 pub use tcpt::{TcptDataType, TcptTransport};
 pub use udp::UdpTransport;
+
+use crate::model::NotifyMessageType;
 
 fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
     if msg.exchange_type == ExchangeType::Informational {

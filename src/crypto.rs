@@ -1,4 +1,3 @@
-use crate::model::{IkeEncryptionAlgorithm, TransformId};
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use openssl::{
@@ -12,6 +11,8 @@ use openssl::{
     x509::X509,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::model::{IkeEncryptionAlgorithm, TransformId};
 
 // RFC2409: Oakley group 2
 const G2_P: &[u8] = &[

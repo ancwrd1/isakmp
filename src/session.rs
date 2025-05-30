@@ -1,12 +1,13 @@
 use std::{net::Ipv4Addr, sync::Arc};
 
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+
 use crate::{
     certs::ClientCertificate,
     message::IsakmpMessageCodec,
     model::{EspCryptMaterial, EspProposal, SaProposal},
 };
-use bytes::Bytes;
-use serde::{Deserialize, Serialize};
 
 #[derive(Default, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SessionType {

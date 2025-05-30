@@ -7,6 +7,13 @@ use std::{
 use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
+use isakmp::{
+    ikev1::{service::Ikev1Service, session::Ikev1Session},
+    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest},
+    payload::AttributesPayload,
+    session::{IsakmpSession, OfficeMode, SessionType},
+    transport::{TcptDataType, UdpTransport},
+};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::{
@@ -15,14 +22,6 @@ use tokio::{
     sync::{mpsc, mpsc::Sender},
 };
 use tracing_subscriber::EnvFilter;
-
-use isakmp::{
-    ikev1::{service::Ikev1Service, session::Ikev1Session},
-    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest},
-    payload::AttributesPayload,
-    session::{IsakmpSession, OfficeMode, SessionType},
-    transport::{TcptDataType, UdpTransport},
-};
 
 const CP_AUTH_BLOB: &str = "(\n\
                :clientType (TRAC)\n\

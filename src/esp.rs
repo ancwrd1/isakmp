@@ -9,8 +9,6 @@ use std::{
     time::Duration,
 };
 
-use crate::crypto::CipherType;
-use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 use anyhow::Context;
 use bytes::Bytes;
 use openssl::{
@@ -29,6 +27,11 @@ use pnet_packet::{
 };
 use rand::random;
 use tokio::time::Instant;
+
+use crate::{
+    crypto::CipherType,
+    model::{EspAuthAlgorithm, EspCryptMaterial, TransformId},
+};
 
 const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
 
@@ -293,12 +296,12 @@ impl EspCodec {
 mod tests {
     use std::{net::Ipv4Addr, sync::Arc};
 
-    use super::*;
     use bytes::Bytes;
     use itertools::iproduct;
     use pnet_macros_support::packet::Packet;
     use pnet_packet::{ipv4::Ipv4Packet, udp::UdpPacket};
 
+    use super::*;
     use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
     fn do_test_esp_codec(

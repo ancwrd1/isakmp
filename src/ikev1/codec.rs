@@ -1,14 +1,15 @@
 use std::io::{Cursor, Read};
 
+use byteorder::{BigEndian, ReadBytesExt};
+use bytes::{BufMut, Bytes, BytesMut};
+use tracing::trace;
+
 use crate::{
     message::{IsakmpMessage, IsakmpMessageCodec},
     model::{ExchangeType, IsakmpFlags, PayloadType},
     payload::Payload,
     session::IsakmpSession,
 };
-use byteorder::{BigEndian, ReadBytesExt};
-use bytes::{BufMut, Bytes, BytesMut};
-use tracing::trace;
 
 pub struct Ikev1Codec {
     session: Box<dyn IsakmpSession + Send + Sync>,
