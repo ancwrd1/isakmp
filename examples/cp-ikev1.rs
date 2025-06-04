@@ -254,9 +254,9 @@ async fn main() -> anyhow::Result<()> {
         println!("Authentication succeeded!");
     }
 
-    let om_reply = service.send_om_request().await?;
+    let om_reply = service.send_om_request(None).await?;
 
-    println!("{om_reply:#?}");
+    println!("OM reply: {om_reply:#?}");
 
     let ccc_session = get_attribute(&om_reply, ConfigAttributeType::CccSessionId)
         .into_iter()
@@ -332,6 +332,10 @@ async fn main() -> anyhow::Result<()> {
 
     let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
+
+    let om_reply = service.send_om_request(Some(ipv4addr)).await?;
+
+    println!("OM reply: {om_reply:#?}");
 
     let attributes = service.do_esp_proposal(ipv4addr, Duration::from_secs(60)).await?;
 

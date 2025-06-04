@@ -428,9 +428,8 @@ impl Ikev1Service {
         })
     }
 
-    fn build_om_cfg(&self) -> anyhow::Result<IsakmpMessage> {
+    fn build_om_cfg(&self, address: Option<Ipv4Addr>) -> anyhow::Result<IsakmpMessage> {
         let empty_attrs = [
-            ConfigAttributeType::Ipv4Address,
             ConfigAttributeType::Ipv4Netmask,
             ConfigAttributeType::Ipv4Dns,
             ConfigAttributeType::AddressExpiry,
@@ -447,6 +446,10 @@ impl Ikev1Service {
             .chain(Some(DataAttribute::long(
                 ConfigAttributeType::MacAddress.into(),
                 Bytes::copy_from_slice(&random::<[u8; 6]>()),
+            )))
+            .chain(Some(DataAttribute::long(
+                ConfigAttributeType::Ipv4Address.into(),
+                Bytes::copy_from_slice(&address.unwrap_or(Ipv4Addr::UNSPECIFIED).octets()),
             )))
             .collect();
 
@@ -786,10 +789,10 @@ impl Ikev1Service {
         self.transport.send(&msg).await
     }
 
-    pub async fn send_om_request(&mut self) -> anyhow::Result<AttributesPayload> {
+    pub async fn send_om_request(&mut self, address: Option<Ipv4Addr>) -> anyhow::Result<AttributesPayload> {
         debug!("Begin sending OM request");
 
-        let request = self.build_om_cfg()?;
+        let request = self.build_om_cfg(address)?;
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 
         debug!("End sending OM request");
