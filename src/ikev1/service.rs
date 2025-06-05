@@ -3,6 +3,7 @@ use std::{net::Ipv4Addr, time::Duration};
 use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use ipnet::Ipv4Net;
 use itertools::{Itertools, iproduct};
 use rand::random;
 use tracing::{debug, trace};
@@ -428,9 +429,8 @@ impl Ikev1Service {
         })
     }
 
-    fn build_om_cfg(&self, address: Option<Ipv4Addr>) -> anyhow::Result<IsakmpMessage> {
+    fn build_om_cfg(&self, address: Option<Ipv4Net>) -> anyhow::Result<IsakmpMessage> {
         let empty_attrs = [
-            ConfigAttributeType::Ipv4Netmask,
             ConfigAttributeType::Ipv4Dns,
             ConfigAttributeType::AddressExpiry,
             ConfigAttributeType::InternalDomainName,
@@ -439,6 +439,12 @@ impl Ikev1Service {
             ConfigAttributeType::CccOfficeModeAllowed,
             ConfigAttributeType::CccConnectAllowed,
         ];
+
+        let (address, netmask) = if let Some(address) = address {
+            (address.addr(), address.netmask())
+        } else {
+            (Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED)
+        };
 
         let attributes = empty_attrs
             .into_iter()
@@ -449,7 +455,11 @@ impl Ikev1Service {
             )))
             .chain(Some(DataAttribute::long(
                 ConfigAttributeType::Ipv4Address.into(),
-                Bytes::copy_from_slice(&address.unwrap_or(Ipv4Addr::UNSPECIFIED).octets()),
+                Bytes::copy_from_slice(&address.octets()),
+            )))
+            .chain(Some(DataAttribute::long(
+                ConfigAttributeType::Ipv4Netmask.into(),
+                Bytes::copy_from_slice(&netmask.octets()),
             )))
             .collect();
 
@@ -789,7 +799,7 @@ impl Ikev1Service {
         self.transport.send(&msg).await
     }
 
-    pub async fn send_om_request(&mut self, address: Option<Ipv4Addr>) -> anyhow::Result<AttributesPayload> {
+    pub async fn send_om_request(&mut self, address: Option<Ipv4Net>) -> anyhow::Result<AttributesPayload> {
         debug!("Begin sending OM request");
 
         let request = self.build_om_cfg(address)?;

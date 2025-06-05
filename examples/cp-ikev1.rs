@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
+use ipnet::Ipv4Net;
 use isakmp::{
     ikev1::{service::Ikev1Service, session::Ikev1Session},
     model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest},
@@ -333,7 +334,9 @@ async fn main() -> anyhow::Result<()> {
     let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
-    let om_reply = service.send_om_request(Some(ipv4addr)).await?;
+    let om_reply = service
+        .send_om_request(Some(Ipv4Net::with_netmask(ipv4addr, netmask)?))
+        .await?;
 
     println!("OM reply: {om_reply:#?}");
 
