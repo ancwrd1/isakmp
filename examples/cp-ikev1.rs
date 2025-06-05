@@ -255,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Authentication succeeded!");
     }
 
-    let om_reply = service.send_om_request(None).await?;
+    let om_reply = service.send_om_request(None, None).await?;
 
     println!("OM reply: {om_reply:#?}");
 
@@ -335,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
 
     let om_reply = service
-        .send_om_request(Some(Ipv4Net::with_netmask(ipv4addr, netmask)?))
+        .send_om_request(Some(Ipv4Net::with_netmask(ipv4addr, netmask)?), None)
         .await?;
 
     println!("OM reply: {om_reply:#?}");
