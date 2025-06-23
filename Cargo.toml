@@ -19,7 +19,7 @@ async-trait = "0.1"
 parking_lot = "0.12"
 tracing = "0.1"
 itertools = "0.14"
-cryptoki = "0.9"
+cryptoki = "0.10"
 serde = { version = "1.0.208", features = ["rc", "derive"] }
 rmp-serde = "1"
 pnet_packet = "0.35"
