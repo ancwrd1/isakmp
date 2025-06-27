@@ -11,7 +11,7 @@ pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<&'static str>> {
     }
 
     for subkey in key.chunks(8) {
-        let mut subkey_bin = subkey.iter().map(|b| format!("{:08b}", b)).collect::<String>();
+        let mut subkey_bin = subkey.iter().map(|b| format!("{b:08b}")).collect::<String>();
 
         let checksum = subkey_bin.as_bytes().chunks(2).fold(0, |sum, v| sum + bin2num(v));
 

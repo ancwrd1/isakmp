@@ -317,8 +317,8 @@ async fn main() -> anyhow::Result<()> {
         domains: search_domains.split([',', ';']).map(ToOwned::to_owned).collect(),
     };
 
-    println!("Lifetime: {}", lifetime);
-    println!("Office mode: {:#?}", office_mode);
+    println!("Lifetime: {lifetime}");
+    println!("Office mode: {office_mode:#?}");
 
     let saved = service.session().save(&office_mode)?;
 
@@ -329,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
     let office_mode = session.load(&saved)?;
-    println!("Loaded office mode: {:#?}", office_mode);
+    println!("Loaded office mode: {office_mode:#?}");
 
     let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
     let mut service = Ikev1Service::new(transport, Box::new(session))?;
