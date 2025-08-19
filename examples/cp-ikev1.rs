@@ -32,7 +32,7 @@ const CP_AUTH_BLOB: &str = "(\n\
                :client_mode (endpoint_security)\n\
                :selected_realm_id (vpn_Azure_Authentication))";
 
-const CP_CA_FINGERPRINT: &str = "MATE FRED PEN RANK LIP HUGH BEAD WET CAGE DEW FULL EDIT";
+const CP_CA_FINGERPRINT: &str = "THEE DARN FOOL WORE JUDY WOK VASE REND COED DOTE TEST MART";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
     static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
