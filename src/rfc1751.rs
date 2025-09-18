@@ -6,7 +6,7 @@ pub fn bin2num(v: &[u8]) -> u16 {
 pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<&'static str>> {
     let mut result = Vec::new();
 
-    if key.len() % 8 != 0 {
+    if !key.len().is_multiple_of(8) {
         anyhow::bail!("Invalid key length");
     }
 
