@@ -840,7 +840,7 @@ impl AttributeValue {
         self.len() == 0
     }
 }
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct DataAttribute {
     pub attribute_type: u16,
     pub value: AttributeValue,
@@ -915,8 +915,25 @@ impl DataAttribute {
             })
         }
     }
+
+    fn sanitized_value(&self) -> &AttributeValue {
+        static EMPTY: AttributeValue = AttributeValue::Long(Bytes::from_static(&[]));
+
+        match self.attribute_type.into() {
+            ConfigAttributeType::UserPassword | ConfigAttributeType::Passcode => &EMPTY,
+            _ => &self.value,
+        }
+    }
 }
 
+impl fmt::Debug for DataAttribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DataAttribute")
+            .field("attribute_type", &self.attribute_type)
+            .field("value", self.sanitized_value())
+            .finish()
+    }
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateType {
     #[default]
