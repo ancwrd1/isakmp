@@ -53,11 +53,10 @@ async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
     drop(stream);
     drop(tcp);
 
-    if let Some(captures) = OTP_RE.captures(&data) {
-        if let Some(otp) = captures.name("otp") {
+    if let Some(captures) = OTP_RE.captures(&data)
+        && let Some(otp) = captures.name("otp") {
             let _ = sender.send(otp.as_str().to_owned()).await;
         }
-    }
 
     Ok(())
 }
@@ -384,21 +383,18 @@ mod util {
         let default_route = crate::util::run_command("ip", ["-4", "route", "show", "default"]).await?;
         let mut parts = default_route.split_whitespace();
         while let Some(part) = parts.next() {
-            if part == "dev" {
-                if let Some(dev) = parts.next() {
+            if part == "dev"
+                && let Some(dev) = parts.next() {
                     let addr = crate::util::run_command("ip", ["-4", "-o", "addr", "show", "dev", dev]).await?;
                     let mut parts = addr.split_whitespace();
                     while let Some(part) = parts.next() {
-                        if part == "inet" {
-                            if let Some(ip) = parts.next() {
-                                if let Some((ip, _)) = ip.split_once('/') {
+                        if part == "inet"
+                            && let Some(ip) = parts.next()
+                                && let Some((ip, _)) = ip.split_once('/') {
                                     return Ok(ip.to_string());
                                 }
-                            }
-                        }
                     }
                 }
-            }
         }
         Err(anyhow!("Cannot determine default IP!"))
     }
