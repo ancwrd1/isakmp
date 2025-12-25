@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use cryptoki::{
-    context::{CInitializeArgs, Pkcs11},
+    context::{CInitializeArgs, CInitializeFlags, Pkcs11},
     mechanism::Mechanism,
     object::{Attribute, AttributeType, CertificateType, KeyType},
     session::{Session, UserType},
@@ -210,14 +210,14 @@ impl Pkcs11Certificate {
     fn init_session(driver_path: &Path, pin: &str) -> anyhow::Result<Session> {
         debug!("Initializing PKCS11");
         let pkcs11 = Pkcs11::new(driver_path)?;
-        pkcs11.initialize(CInitializeArgs::OsThreads)?;
+        pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
 
         let slots = pkcs11.get_slots_with_token()?;
 
         debug!("Total slots: {}", slots.len());
         let slot = slots.into_iter().next().context("No slots found")?;
 
-        let user_pin = AuthPin::new(pin.to_owned());
+        let user_pin = AuthPin::new(pin.to_owned().into());
 
         debug!("Opening session");
         let session = pkcs11.open_ro_session(slot)?;
@@ -319,7 +319,7 @@ impl ClientCertificate for Pkcs11Certificate {
 
         if always_auth {
             debug!("Authenticating for additional context");
-            let user_pin = AuthPin::new(self.pin.clone());
+            let user_pin = AuthPin::new(self.pin.clone().into());
             session.login(UserType::ContextSpecific, Some(&user_pin))?;
         }
 
