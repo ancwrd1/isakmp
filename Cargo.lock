@@ -275,6 +275,7 @@ dependencies = [
  "rand",
  "regex",
  "rmp-serde",
+ "secrecy",
  "serde",
  "tokio",
  "tokio-util",

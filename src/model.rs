@@ -3,6 +3,7 @@ use std::{fmt, io::Read, path::PathBuf, time::Duration};
 use bitflags::bitflags;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
+use secrecy::SecretString;
 
 pub const VID_CHECKPOINT: &[u8] = b"\xde\xfb\x99\xe6\x9a\x9f\x1f\x6e\x06\xf1\x50\x06\xb1\xf1\x66\xae";
 pub const VID_FRAGMENTATION: &[u8] = b"\x40\x48\xb7\xd5\x6e\xbc\xe8\x85\x25\xe7\xde\x7f\x00\xd6\xc2\xd3";
@@ -1029,14 +1030,14 @@ pub enum Identity {
     None,
     Pkcs12 {
         data: Vec<u8>,
-        password: String,
+        password: SecretString,
     },
     Pkcs8 {
         path: PathBuf,
     },
     Pkcs11 {
         driver_path: PathBuf,
-        pin: String,
+        pin: SecretString,
         key_id: Option<Bytes>,
     },
 }

@@ -17,6 +17,7 @@ use openssl::{
     stack::Stack,
     x509::{X509, X509NameRef, X509StoreContext, store::X509StoreBuilder},
 };
+use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, trace};
 
 fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
@@ -201,7 +202,7 @@ impl ClientCertificate for Pkcs8Certificate {
 
 pub(crate) struct Pkcs11Certificate {
     driver_path: PathBuf,
-    pin: String,
+    pin: SecretString,
     key_id: Option<Bytes>,
     certs: CertList,
 }
@@ -228,8 +229,8 @@ impl Pkcs11Certificate {
         Ok(session)
     }
 
-    pub fn new(driver_path: PathBuf, pin: String, key_id: Option<Bytes>) -> anyhow::Result<Self> {
-        let session = Self::init_session(&driver_path, &pin)?;
+    pub fn new(driver_path: PathBuf, pin: SecretString, key_id: Option<Bytes>) -> anyhow::Result<Self> {
+        let session = Self::init_session(&driver_path, pin.expose_secret())?;
 
         let mut cert_template = vec![
             Attribute::Token(true),
@@ -288,7 +289,7 @@ impl ClientCertificate for Pkcs11Certificate {
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        let session = Self::init_session(&self.driver_path, &self.pin)?;
+        let session = Self::init_session(&self.driver_path, self.pin.expose_secret())?;
 
         let mut priv_key_template = vec![
             Attribute::Token(true),
@@ -319,7 +320,7 @@ impl ClientCertificate for Pkcs11Certificate {
 
         if always_auth {
             debug!("Authenticating for additional context");
-            let user_pin = AuthPin::new(self.pin.clone().into());
+            let user_pin = AuthPin::new(self.pin.expose_secret().to_owned().into());
             session.login(UserType::ContextSpecific, Some(&user_pin))?;
         }
 

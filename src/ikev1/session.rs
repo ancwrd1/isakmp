@@ -7,6 +7,7 @@ use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -152,7 +153,10 @@ struct Ikev1SessionImpl {
 impl Ikev1SessionImpl {
     fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
         let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
-            Identity::Pkcs12 { data, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(&data, &password)?)),
+            Identity::Pkcs12 { data, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(
+                &data,
+                password.expose_secret(),
+            )?)),
             Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
             Identity::Pkcs11 {
                 driver_path,

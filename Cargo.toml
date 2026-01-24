@@ -26,6 +26,7 @@ pnet_packet = "0.35"
 pnet_macros = "0.35"
 pnet_macros_support = "0.35"
 ipnet = "2"
+secrecy = "0.10"
 
 [dev-dependencies]
 opener = "0.8"

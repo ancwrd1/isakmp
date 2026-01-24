@@ -231,12 +231,10 @@ impl EspCodec {
 
     fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
         let key = PKey::hmac(&params.sk_a)?;
-
         let digest = match params.auth_algorithm {
             EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => MessageDigest::sha256(),
-            EspAuthAlgorithm::HmacSha160 => MessageDigest::sha1(),
-            EspAuthAlgorithm::HmacSha96 => MessageDigest::sha1(),
-            _ => anyhow::bail!("Unsupported auth algorithm"),
+            EspAuthAlgorithm::HmacSha160 | EspAuthAlgorithm::HmacSha96 => MessageDigest::sha1(),
+            _ => anyhow::bail!("Unsupported authentication algorithm: {:?}", params.auth_algorithm),
         };
 
         let mut signer = Signer::new(digest, &key)?;
@@ -254,7 +252,7 @@ impl EspCodec {
     fn verify(&self, params: &EspCryptMaterial, parts: &[&[u8]], auth: &[u8]) -> anyhow::Result<()> {
         let hmac = self.authenticate(params, parts)?;
 
-        if hmac == auth {
+        if openssl::memcmp::eq(&hmac, auth) {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Invalid packet signature"))
