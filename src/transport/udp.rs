@@ -56,7 +56,7 @@ impl UdpTransport {
 #[async_trait]
 impl IsakmpTransport for UdpTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
-        let data = self.codec.encode(message);
+        let data = self.codec.encode(message)?;
         debug!(
             "Sending ISAKMP message, len: {}, to: {}",
             data.len(),

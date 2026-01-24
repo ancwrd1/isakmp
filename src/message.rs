@@ -6,7 +6,7 @@ use crate::{
 };
 
 pub trait IsakmpMessageCodec {
-    fn encode(&mut self, message: &IsakmpMessage) -> Bytes;
+    fn encode(&mut self, message: &IsakmpMessage) -> anyhow::Result<Bytes>;
 
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
 }

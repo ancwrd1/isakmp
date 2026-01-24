@@ -1,3 +1,7 @@
+//! IKEv1 Payload implementation per RFC 2408 (ISAKMP) and RFC 2409 (IKE)
+//!
+//! This module implements the payload structures used in IKEv1 message exchange.
+
 use std::io::{Cursor, Read};
 
 use anyhow::anyhow;
@@ -10,6 +14,11 @@ use crate::model::{
     SituationData, SituationFlags, TransformId,
 };
 
+const MAX_PAYLOAD_SIZE: u16 = 16384;
+
+/// Trait for serializable payloads.
+///
+/// See RFC 2408 Section 3 for payload format specifications.
 pub trait PayloadLike: Sized {
     fn to_bytes(&self) -> Bytes;
     fn len(&self) -> usize;
@@ -24,6 +33,11 @@ fn read_next_payload<R: Read>(reader: &mut R) -> anyhow::Result<(PayloadType, By
     let next_payload = reader.read_u8()?.into();
     reader.read_u8()?;
     let length = reader.read_u16::<BigEndian>()?;
+
+    if length > MAX_PAYLOAD_SIZE {
+        anyhow::bail!("Payload too large: {} > {}", length, MAX_PAYLOAD_SIZE);
+    }
+
     let mut data = vec![0u8; length as usize - 4];
     reader.read_exact(&mut data)?;
 
@@ -215,7 +229,11 @@ impl PayloadLike for ProposalPayload {
                 transforms,
             })
         } else {
-            Err(anyhow!("Invalid transforms payload"))
+            Err(anyhow!(
+                "Transform count mismatch: expected {}, got {}",
+                num_transforms,
+                transforms.len()
+            ))
         }
     }
 }

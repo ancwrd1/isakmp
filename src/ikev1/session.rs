@@ -1,10 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use rand::random;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     certs::{ClientCertificate, Pkcs8Certificate, Pkcs11Certificate},
@@ -14,6 +18,10 @@ use crate::{
     model::*,
     session::{EndpointData, IsakmpSession, OfficeMode, SessionKeys, SessionType},
 };
+
+// RFC 2409 recommended nonce size
+const NONCE_SIZE: usize = 32;
+const MAX_RECEIVED_HASHES: usize = 1000;
 
 #[derive(Clone)]
 pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
@@ -52,7 +60,7 @@ impl IsakmpSession for Ikev1Session {
         self.0.read().cipher_block_size()
     }
 
-    fn validate_message(&mut self, data: &[u8]) -> bool {
+    fn validate_message(&mut self, data: &[u8]) -> anyhow::Result<bool> {
         self.0.write().validate_message(data)
     }
 
@@ -120,7 +128,7 @@ struct Ikev1SessionStore {
     session_keys: Arc<SessionKeys>,
     iv: HashMap<u32, Bytes>,
     sa_bytes: Bytes,
-    received_hashes: Vec<Bytes>,
+    received_hashes: VecDeque<Bytes>,
     office_mode: OfficeMode,
     digest_type: DigestType,
     cipher_type: CipherType,
@@ -136,7 +144,7 @@ struct Ikev1SessionImpl {
     session_keys: Arc<SessionKeys>,
     iv: HashMap<u32, Bytes>,
     sa_bytes: Bytes,
-    received_hashes: Vec<Bytes>,
+    received_hashes: VecDeque<Bytes>,
     esp_in: Arc<EspCryptMaterial>,
     esp_out: Arc<EspCryptMaterial>,
 }
@@ -167,18 +175,18 @@ impl Ikev1SessionImpl {
             client_cert,
             initiator: Arc::new(EndpointData {
                 cookie: cookie_i,
-                nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
+                nonce: Bytes::copy_from_slice(&random::<[u8; NONCE_SIZE]>()),
                 ..Default::default()
             }),
             responder: Arc::new(EndpointData {
                 cookie: cookie_r,
-                nonce: Bytes::copy_from_slice(&random::<[u8; 32]>()),
+                nonce: Bytes::copy_from_slice(&random::<[u8; NONCE_SIZE]>()),
                 ..Default::default()
             }),
             session_keys: Arc::default(),
             iv: HashMap::default(),
             sa_bytes: Bytes::default(),
-            received_hashes: Vec::new(),
+            received_hashes: VecDeque::new(),
             esp_in: Arc::default(),
             esp_out: Arc::default(),
         })
@@ -221,16 +229,18 @@ impl Ikev1SessionImpl {
         })
     }
 
-    fn retrieve_iv(&mut self, message_id: u32) -> Bytes {
-        let zero_iv = self.iv[&0].clone();
-        self.iv
+    fn retrieve_iv(&mut self, message_id: u32) -> anyhow::Result<Bytes> {
+        let zero_iv = self.iv.get(&0).context("Session IV not initialized")?.clone();
+
+        Ok(self
+            .iv
             .entry(message_id)
             .or_insert_with(|| {
                 let mut hash = self.crypto.hash([zero_iv.as_ref(), &message_id.to_be_bytes()]).unwrap();
                 hash.truncate(self.crypto.block_size());
                 hash
             })
-            .clone()
+            .clone())
     }
 
     fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
@@ -244,6 +254,10 @@ impl Ikev1SessionImpl {
             IkeHashAlgorithm::Sha512 => DigestType::Sha512,
             _ => return Err(anyhow!("Unsupported hash algorithm: {:?}", proposal.hash_alg)),
         };
+
+        if digest.is_deprecated() {
+            warn!("Using deprecated hash algorithm: {:?}", digest);
+        }
 
         let cipher = CipherType::new_for_ike(proposal.enc_alg, proposal.key_len)?;
 
@@ -406,7 +420,7 @@ impl Ikev1SessionImpl {
     }
 
     fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        let iv = self.retrieve_iv(id);
+        let iv = self.retrieve_iv(id)?;
 
         let encrypted = self.crypto.encrypt(&self.session_keys.skeyid_e, data, &iv)?;
 
@@ -419,7 +433,7 @@ impl Ikev1SessionImpl {
     }
 
     fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        let iv = self.retrieve_iv(id);
+        let iv = self.retrieve_iv(id)?;
 
         let decrypted = self.crypto.decrypt(&self.session_keys.skeyid_e, data, &iv)?;
 
@@ -435,14 +449,16 @@ impl Ikev1SessionImpl {
         self.crypto.block_size()
     }
 
-    fn validate_message(&mut self, data: &[u8]) -> bool {
-        let hash = self.hash(&[data]).expect("Hash computation should not fail");
+    fn validate_message(&mut self, data: &[u8]) -> anyhow::Result<bool> {
+        let hash = self.hash(&[data])?;
         if self.received_hashes.contains(&hash) {
-            false
-        } else {
-            self.received_hashes.push(hash);
-            true
+            return Ok(false);
         }
+        if self.received_hashes.len() >= MAX_RECEIVED_HASHES {
+            self.received_hashes.pop_front();
+        }
+        self.received_hashes.push_back(hash);
+        Ok(true)
     }
 
     fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {

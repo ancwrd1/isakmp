@@ -40,11 +40,17 @@ const G14_P: &[u8] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DigestType {
-    Md5,
-    Sha1,
+    Md5,  // Cryptographically broken
+    Sha1, // Deprecated for signatures
     Sha256,
     Sha384,
     Sha512,
+}
+
+impl DigestType {
+    pub fn is_deprecated(&self) -> bool {
+        matches!(self, DigestType::Md5 | DigestType::Sha1)
+    }
 }
 
 impl From<DigestType> for MessageDigest {

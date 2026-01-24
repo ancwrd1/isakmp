@@ -33,8 +33,6 @@ use crate::{
     model::{EspAuthAlgorithm, EspCryptMaterial, TransformId},
 };
 
-const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
-
 #[derive(Packet)]
 #[allow(unused)]
 pub struct Esp {
@@ -69,9 +67,9 @@ impl EspCodec {
         }
     }
 
-    pub fn add_params(&mut self, spi: u32, params: Arc<EspCryptMaterial>) {
+    pub fn add_params(&mut self, spi: u32, params: Arc<EspCryptMaterial>, ttl: Duration) {
         self.params
-            .retain(|_, (timestamp, _)| (*timestamp + SPI_EXPIRATION_TIME) > Instant::now());
+            .retain(|_, (timestamp, _)| (*timestamp + ttl) > Instant::now());
 
         self.params.insert(spi, (Instant::now(), params));
     }
@@ -304,6 +302,8 @@ mod tests {
     use super::*;
     use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
 
+    const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
+
     fn do_test_esp_codec(
         encap_type: EspEncapType,
         sk_e: &[u8],
@@ -323,7 +323,7 @@ mod tests {
         let dst = Ipv4Addr::new(192, 168, 0, 2);
 
         let mut codec = EspCodec::new(src, dst, encap_type);
-        codec.add_params(0x01020304, params);
+        codec.add_params(0x01020304, params, SPI_EXPIRATION_TIME);
 
         let data = b"quick brown fox jumps over the lazy dog";
 
@@ -378,7 +378,7 @@ mod tests {
             Ipv4Addr::new(1, 1, 1, 1),
             EspEncapType::Udp,
         );
-        codec.add_params(0xf47b67fe, params);
+        codec.add_params(0xf47b67fe, params, SPI_EXPIRATION_TIME);
 
         const DATA: &[u8] = include_bytes!("../tests/ip-udp-esp.bin");
 

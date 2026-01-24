@@ -196,7 +196,7 @@ async fn do_receive(data_type: TcptDataType, stream: &mut TcpStream, timeout: Du
 #[async_trait]
 impl IsakmpTransport for TcptTransport {
     async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
-        let data = self.codec.encode(message);
+        let data = self.codec.encode(message)?;
 
         trace!("Sending ISAKMP message: {:#?}", message);
 

@@ -22,7 +22,7 @@ impl Ikev1Codec {
 }
 
 impl IsakmpMessageCodec for Ikev1Codec {
-    fn encode(&mut self, message: &IsakmpMessage) -> Bytes {
+    fn encode(&mut self, message: &IsakmpMessage) -> anyhow::Result<Bytes> {
         let mut payload_buf = BytesMut::new();
         for (i, payload) in message.payloads.iter().enumerate() {
             payload_buf.put_u8(message.next_payload(i + 1));
@@ -39,8 +39,7 @@ impl IsakmpMessageCodec for Ikev1Codec {
             payload_buf.put_u8(pad_len as u8);
 
             self.session
-                .encrypt_and_set_iv(&payload_buf.freeze(), message.message_id)
-                .unwrap_or_default()
+                .encrypt_and_set_iv(&payload_buf.freeze(), message.message_id)?
         } else {
             payload_buf.freeze()
         };
@@ -57,11 +56,11 @@ impl IsakmpMessageCodec for Ikev1Codec {
         buf.put_u32(28 + payload.len() as u32);
         buf.put_slice(&payload);
 
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
-        if !self.session.validate_message(data) {
+        if !self.session.validate_message(data)? {
             trace!("Discarding duplicate message");
             return Ok(None);
         }

@@ -1067,7 +1067,7 @@ impl fmt::Display for SaProposal {
         f.debug_struct("SaProposal")
             .field("cookie_i", &self.cookie_i)
             .field("cookie_r", &self.cookie_r)
-            .field("hash_alg", &self.sa_bytes)
+            .field("hash_alg", &self.hash_alg)
             .field("enc_alg", &self.enc_alg)
             .field("key_len", &self.key_len)
             .field("group", &self.group)

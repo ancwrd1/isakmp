@@ -12,13 +12,21 @@ pub use udp::UdpTransport;
 
 use crate::model::NotifyMessageType;
 
+// RFC 2408 notify message types
+const NOTIFY_CONNECTED: u16 = 31;
+const NOTIFY_RESPONDER_LIFETIME: u16 = 37;
+const NOTIFY_CHECKPOINT_SPECIFIC: u16 = 9101;
+
 fn check_informational(msg: &IsakmpMessage) -> anyhow::Result<()> {
     if msg.exchange_type == ExchangeType::Informational {
         for payload in &msg.payloads {
             if let Payload::Notification(notify) = payload {
-                if matches!(notify.message_type, NotifyMessageType::Other(31 | 37 | 9101)) {
+                if matches!(
+                    notify.message_type,
+                    NotifyMessageType::Other(NOTIFY_CONNECTED | NOTIFY_RESPONDER_LIFETIME | NOTIFY_CHECKPOINT_SPECIFIC)
+                ) {
                     anyhow::bail!(String::from_utf8_lossy(&notify.data).into_owned());
-                } else if notify.message_type < 31.into() {
+                } else if notify.message_type < NOTIFY_CONNECTED.into() {
                     anyhow::bail!("IKE notify error {:?}", notify.message_type);
                 }
             }
