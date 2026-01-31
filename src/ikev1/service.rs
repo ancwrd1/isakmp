@@ -13,7 +13,7 @@ use crate::{
     transport::IsakmpTransport,
 };
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesPayload> {
     response
