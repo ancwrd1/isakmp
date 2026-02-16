@@ -1,9 +1,3 @@
-use std::{
-    io::{Write, stdin, stdout},
-    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
-    time::Duration,
-};
-
 use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
@@ -15,8 +9,13 @@ use isakmp::{
     session::{IsakmpSession, OfficeMode, SessionType},
     transport::{TcptDataType, UdpTransport},
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
+use std::{
+    io::{Write, stdin, stdout},
+    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -35,7 +34,8 @@ const CP_AUTH_BLOB: &str = "(\n\
 const CP_CA_FINGERPRINT: &str = "THEE DARN FOOL WORE JUDY WOK VASE REND COED DOTE TEST MART";
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
-    static OTP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
+    static OTP_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
 
     let tcp = TcpListener::bind("127.0.0.1:7779").await?;
     let (mut stream, _) = tcp.accept().await?;
