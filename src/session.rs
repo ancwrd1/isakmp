@@ -94,4 +94,6 @@ pub trait IsakmpSession {
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
+
+    fn hybrid_auth(&self) -> bool;
 }

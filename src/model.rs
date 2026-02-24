@@ -534,6 +534,8 @@ pub enum PayloadType {
     VendorId,
     Attributes,
     Natd,
+    MachineCertificate, // Checkpoint proprietary: PA_MCERT for hybrid auth
+    MachineSignature,   // Checkpoint proprietary: PA_MSIG for hybrid auth
     Other(u8),
 }
 
@@ -557,6 +559,8 @@ impl From<PayloadType> for u8 {
             PayloadType::Attributes => 14,
             PayloadType::Natd => 20,
             PayloadType::Other(v) => v,
+            PayloadType::MachineCertificate => 0xf6,
+            PayloadType::MachineSignature => 0xf9,
         }
     }
 }
@@ -580,6 +584,8 @@ impl From<u8> for PayloadType {
             13 => PayloadType::VendorId,
             14 => PayloadType::Attributes,
             20 => PayloadType::Natd,
+            0xf6 => PayloadType::MachineCertificate,
+            0xf9 => PayloadType::MachineSignature,
             v => PayloadType::Other(v),
         }
     }
@@ -1031,14 +1037,17 @@ pub enum Identity {
     Pkcs12 {
         data: Vec<u8>,
         password: SecretString,
+        hybrid_auth: bool,
     },
     Pkcs8 {
         path: PathBuf,
+        hybrid_auth: bool,
     },
     Pkcs11 {
         driver_path: PathBuf,
         pin: SecretString,
         key_id: Option<Bytes>,
+        hybrid_auth: bool,
     },
 }
 

@@ -79,7 +79,7 @@ impl Ikev1Service {
                     DataAttribute::short(IkeAttributeType::GroupDescription.into(), group.into()),
                     DataAttribute::short(
                         IkeAttributeType::AuthenticationMethod.into(),
-                        if self.session.client_certificate().is_some() {
+                        if self.session.client_certificate().is_some() && !self.session.hybrid_auth() {
                             IkeAuthMethod::RsaSignature.into()
                         } else {
                             IkeAuthMethod::HybridInitRsa.into()
@@ -317,8 +317,10 @@ impl Ikev1Service {
         })
     }
 
-    fn build_id_protection(&self, notify_data: Bytes) -> anyhow::Result<IsakmpMessage> {
-        let id_payload = if let Some(client_cert) = self.session.client_certificate() {
+    fn build_id_protection(&self, identity_request: &IdentityRequest) -> anyhow::Result<IsakmpMessage> {
+        let id_payload = if !self.session.hybrid_auth()
+            && let Some(client_cert) = self.session.client_certificate()
+        {
             Payload::Identification(IdentificationPayload {
                 id_type: IdentityType::DerAsn1Dn.into(),
                 data: client_cert.subject(),
@@ -342,7 +344,7 @@ impl Ikev1Service {
                 .into_iter()
                 .chain(self.session.responder().cookie.to_be_bytes())
                 .collect(),
-            data: notify_data,
+            data: Bytes::copy_from_slice(identity_request.auth_blob.as_bytes()),
         });
 
         let hash_i = self.session.hash_id_i(id_payload.to_bytes().as_ref())?;
@@ -350,17 +352,34 @@ impl Ikev1Service {
         let payloads = if let Some(client_cert) = self.session.client_certificate() {
             let mut payloads = vec![id_payload];
 
-            payloads.extend(client_cert.certs().into_iter().map(|cert| {
-                trace!("Adding certificate payload");
-                Payload::Certificate(CertificatePayload {
-                    certificate_type: CertificateType::X509ForSignature,
-                    data: cert,
-                })
-            }));
+            if self.session.hybrid_auth() {
+                debug!("Using hybrid authentication with machine certificate");
 
-            let sig_payload = Payload::Signature(BasicPayload::new(client_cert.sign(&hash_i)?));
+                payloads.push(Payload::Hash(BasicPayload::new(hash_i.clone())));
 
-            payloads.push(sig_payload);
+                payloads.extend(client_cert.certs().into_iter().take(1).map(|cert| {
+                    Payload::MachineCertificate(CertificatePayload {
+                        certificate_type: CertificateType::X509ForSignature,
+                        data: cert,
+                    })
+                }));
+
+                let sig_payload = Payload::MachineSignature(BasicPayload::new(client_cert.sign(&hash_i)?));
+
+                payloads.push(sig_payload);
+            } else {
+                debug!("Using certificate authentication with user certificate");
+                payloads.extend(client_cert.certs().into_iter().map(|cert| {
+                    Payload::Certificate(CertificatePayload {
+                        certificate_type: CertificateType::X509ForSignature,
+                        data: cert,
+                    })
+                }));
+
+                let sig_payload = Payload::Signature(BasicPayload::new(client_cert.sign(&hash_i)?));
+
+                payloads.push(sig_payload);
+            }
             payloads.push(notify_payload);
 
             payloads
@@ -672,7 +691,7 @@ impl Ikev1Service {
     ) -> anyhow::Result<(Option<AttributesPayload>, u32)> {
         debug!("Begin identity protection");
 
-        let request = self.build_id_protection(Bytes::copy_from_slice(identity_request.auth_blob.as_bytes()))?;
+        let request = self.build_id_protection(&identity_request)?;
 
         let response = self.transport.send_receive(&request, self.socket_timeout).await?;
 

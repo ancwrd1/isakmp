@@ -533,6 +533,8 @@ pub enum Payload {
     Signature(BasicPayload),
     Attributes(AttributesPayload),
     Natd(BasicPayload),
+    MachineCertificate(CertificatePayload),
+    MachineSignature(BasicPayload),
     Other(PayloadType, BasicPayload),
 }
 
@@ -549,9 +551,10 @@ impl Payload {
             | Payload::Nonce(p)
             | Payload::Hash(p)
             | Payload::Natd(p)
-            | Payload::Signature(p) => p.to_bytes(),
+            | Payload::Signature(p)
+            | Payload::MachineSignature(p) => p.to_bytes(),
             Payload::Identification(p) => p.to_bytes(),
-            Payload::Certificate(p) | Payload::CertificateRequest(p) => p.to_bytes(),
+            Payload::Certificate(p) | Payload::MachineCertificate(p) | Payload::CertificateRequest(p) => p.to_bytes(),
             Payload::Attributes(p) => p.to_bytes(),
             Payload::Other(_, p) => p.to_bytes(),
         }
@@ -569,9 +572,10 @@ impl Payload {
             | Payload::Nonce(p)
             | Payload::Hash(p)
             | Payload::Natd(p)
-            | Payload::Signature(p) => p.len(),
+            | Payload::Signature(p)
+            | Payload::MachineSignature(p) => p.len(),
             Payload::Identification(p) => p.len(),
-            Payload::Certificate(p) | Payload::CertificateRequest(p) => p.len(),
+            Payload::Certificate(p) | Payload::MachineCertificate(p) | Payload::CertificateRequest(p) => p.len(),
             Payload::Attributes(p) => p.len(),
             Payload::Other(_, p) => p.len(),
         }
@@ -598,7 +602,9 @@ impl Payload {
             PayloadType::Hash => Ok(Payload::Hash(BasicPayload::parse(reader)?)),
             PayloadType::Natd => Ok(Payload::Natd(BasicPayload::parse(reader)?)),
             PayloadType::Signature => Ok(Payload::Signature(BasicPayload::parse(reader)?)),
+            PayloadType::MachineSignature => Ok(Payload::MachineSignature(BasicPayload::parse(reader)?)),
             PayloadType::Certificate => Ok(Payload::Certificate(CertificatePayload::parse(reader)?)),
+            PayloadType::MachineCertificate => Ok(Payload::MachineCertificate(CertificatePayload::parse(reader)?)),
             PayloadType::CertificateRequest => Ok(Payload::CertificateRequest(CertificatePayload::parse(reader)?)),
             PayloadType::Attributes => Ok(Payload::Attributes(AttributesPayload::parse(reader)?)),
             _ => Ok(Payload::Other(next_payload, BasicPayload::parse(reader)?)),
@@ -618,8 +624,10 @@ impl Payload {
             Self::Identification(_) => PayloadType::Identification,
             Self::Hash(_) => PayloadType::Hash,
             Self::Certificate(_) => PayloadType::Certificate,
+            Self::MachineCertificate(_) => PayloadType::MachineCertificate,
             Self::CertificateRequest(_) => PayloadType::CertificateRequest,
             Self::Signature(_) => PayloadType::Signature,
+            Self::MachineSignature(_) => PayloadType::MachineSignature,
             Self::Attributes(_) => PayloadType::Attributes,
             Self::Natd(_) => PayloadType::Natd,
             Self::Other(t, _) => *t,

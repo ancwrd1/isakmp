@@ -120,6 +120,10 @@ impl IsakmpSession for Ikev1Session {
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
         Box::new(Ikev1Codec::new(Box::new(self.clone())))
     }
+
+    fn hybrid_auth(&self) -> bool {
+        self.0.read().hybrid_auth
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,6 +142,7 @@ struct Ikev1SessionStore {
 
 struct Ikev1SessionImpl {
     session_type: SessionType,
+    hybrid_auth: bool,
     crypto: Crypto,
     client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
     initiator: Arc<EndpointData>,
@@ -152,18 +157,31 @@ struct Ikev1SessionImpl {
 
 impl Ikev1SessionImpl {
     fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
-        let client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>> = match identity {
-            Identity::Pkcs12 { data, password } => Some(Arc::new(Pkcs8Certificate::from_pkcs12(
-                &data,
-                password.expose_secret(),
-            )?)),
-            Identity::Pkcs8 { path } => Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)),
+        let (hybrid_auth, client_cert): (bool, Option<Arc<dyn ClientCertificate + Send + Sync>>) = match identity {
+            Identity::Pkcs12 {
+                data,
+                password,
+                hybrid_auth,
+            } => (
+                hybrid_auth,
+                Some(Arc::new(Pkcs8Certificate::from_pkcs12(
+                    &data,
+                    password.expose_secret(),
+                )?)),
+            ),
+            Identity::Pkcs8 { path, hybrid_auth } => {
+                (hybrid_auth, Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)))
+            }
             Identity::Pkcs11 {
                 driver_path,
                 pin,
                 key_id,
-            } => Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
-            Identity::None => None,
+                hybrid_auth,
+            } => (
+                hybrid_auth,
+                Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
+            ),
+            Identity::None => (false, None),
         };
 
         let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, GroupType::Oakley2)?;
@@ -175,6 +193,7 @@ impl Ikev1SessionImpl {
 
         Ok(Self {
             session_type,
+            hybrid_auth,
             crypto,
             client_cert,
             initiator: Arc::new(EndpointData {

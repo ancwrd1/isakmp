@@ -172,11 +172,15 @@ async fn main() -> anyhow::Result<()> {
             Some(arg) => Identity::Pkcs12 {
                 data: std::fs::read(arg)?,
                 password: args.get(4).map(|s| s.as_str()).unwrap_or_default().into(),
+                hybrid_auth: false,
             },
             None => return Err(anyhow!("Missing pkcs12 file path")),
         },
         Some("pkcs8") => match args.get(3) {
-            Some(arg) => Identity::Pkcs8 { path: arg.into() },
+            Some(arg) => Identity::Pkcs8 {
+                path: arg.into(),
+                hybrid_auth: false,
+            },
             None => return Err(anyhow!("Missing pkcs8 pem file path")),
         },
         Some("pkcs11") => match args.get(3) {
@@ -184,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
                 driver_path: arg.into(),
                 pin: args.get(4).map(|s| s.as_str()).unwrap_or_default().into(),
                 key_id: args.get(5).map(|s| hex::decode(s).unwrap().into()),
+                hybrid_auth: false,
             },
             None => return Err(anyhow!("Missing pkcs8 pem file path")),
         },
