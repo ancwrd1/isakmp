@@ -5,6 +5,8 @@ use crate::{
     payload::Payload,
 };
 
+pub const IKEV1_VERSION: u8 = 0x10;
+
 pub trait IsakmpMessageCodec {
     fn encode(&mut self, message: &IsakmpMessage) -> anyhow::Result<Bytes>;
 

@@ -9,7 +9,12 @@ use rand::random;
 use tracing::{debug, trace};
 
 use crate::{
-    certs::CertList, message::IsakmpMessage, model::*, payload::*, rfc1751::key_to_english, session::IsakmpSession,
+    certs::CertList,
+    message::{IKEV1_VERSION, IsakmpMessage},
+    model::*,
+    payload::*,
+    rfc1751::key_to_english,
+    session::IsakmpSession,
     transport::IsakmpTransport,
 };
 
@@ -131,7 +136,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: 0,
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
@@ -227,7 +232,7 @@ impl Ikev1Service {
         let message = IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
@@ -255,7 +260,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Informational,
             flags: IsakmpFlags::empty(),
             message_id,
@@ -309,7 +314,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
             message_id: 0,
@@ -391,7 +396,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::ENCRYPTION,
             message_id: 0,
@@ -420,7 +425,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
@@ -440,7 +445,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
@@ -495,7 +500,7 @@ impl Ikev1Service {
         Ok(IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
             message_id,
@@ -926,7 +931,7 @@ impl Ikev1Service {
         let hash_msg = IsakmpMessage {
             cookie_i: self.session.cookie_i(),
             cookie_r: self.session.cookie_r(),
-            version: 0x10,
+            version: IKEV1_VERSION,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
             message_id: response.message_id,
