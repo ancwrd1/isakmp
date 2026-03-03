@@ -3,12 +3,8 @@ pub fn bin2num(v: &[u8]) -> u16 {
     v.iter().fold(0, |sum, v| sum * 2 + (*v as u16 - 48))
 }
 
-pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<&'static str>> {
+pub fn key_to_english(key: [u8; 16]) -> Vec<&'static str> {
     let mut result = Vec::new();
-
-    if !key.len().is_multiple_of(8) {
-        anyhow::bail!("Invalid key length");
-    }
 
     for subkey in key.chunks(8) {
         let mut subkey_bin = subkey.iter().map(|b| format!("{b:08b}")).collect::<String>();
@@ -23,7 +19,7 @@ pub fn key_to_english(key: &[u8]) -> anyhow::Result<Vec<&'static str>> {
         }
     }
 
-    Ok(result)
+    result
 }
 
 const WORDLIST: &[&str] = &[
@@ -179,6 +175,6 @@ mod tests {
         const EXPECTED: &str = "NIBS SLID RUE ORE ALEC BASS FOWL NECK GANG ICON SHIM HAND";
         const KEY: &[u8] = b"\xC4\x1B\xDC\xE4\x97\xF4\xAA\xA7\x85\xD8\x5A\x24\xCE\xFD\xA7\x26\x15\x60\xDC\x49";
 
-        assert_eq!(EXPECTED, key_to_english(&KEY[0..16]).unwrap().join(" "));
+        assert_eq!(EXPECTED, key_to_english(KEY[0..16].try_into().unwrap()).join(" "));
     }
 }

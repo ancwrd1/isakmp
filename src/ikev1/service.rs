@@ -734,7 +734,7 @@ impl Ikev1Service {
 
             for cert in &certs {
                 let cert_list = CertList::from_ipsec(&[cert])?;
-                let fingerprint = key_to_english(&cert_list.fingerprint()[0..16])?.join(" ");
+                let fingerprint = key_to_english(cert_list.fingerprint()[0..16].try_into()?).join(" ");
 
                 debug!("Fingerprint for: {}: {}", cert_list.subject_name(), fingerprint);
 
