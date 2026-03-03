@@ -9,7 +9,7 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{
     message::{IsakmpMessage, IsakmpMessageCodec},
@@ -18,6 +18,7 @@ use crate::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TcptDataType {
@@ -180,7 +181,7 @@ impl TcptTransport {
 
 async fn do_send(data_type: TcptDataType, stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
     let mut framed = TcptTransportCodec::new(data_type).framed(stream);
-    framed.send(Bytes::copy_from_slice(data)).await?;
+    tokio::time::timeout(SEND_TIMEOUT, framed.send(Bytes::copy_from_slice(data))).await??;
     Ok(())
 }
 
@@ -203,15 +204,28 @@ impl IsakmpTransport for TcptTransport {
         let data_type = self.data_type;
         let stream = self.get_stream().await?;
 
-        do_send(data_type, stream, &data).await?;
-
-        Ok(())
+        match do_send(data_type, stream, &data).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                warn!("{}", e);
+                self.disconnect();
+                Err(e)
+            }
+        }
     }
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
         let stream = self.stream.as_mut().context("No stream")?;
         loop {
-            let data = do_receive(self.data_type, stream, timeout).await?;
+            let data = match do_receive(self.data_type, stream, timeout).await {
+                Ok(data) => data,
+                Err(e) => {
+                    warn!("{}", e);
+                    self.disconnect();
+                    return Err(e);
+                }
+            };
+
             if let Some(received_message) = self.codec.decode(&data)? {
                 check_informational(&received_message)?;
 
