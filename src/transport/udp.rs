@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{iter, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -66,7 +66,8 @@ impl IsakmpTransport for UdpTransport {
         trace!("Sending ISAKMP message: {:#?}", message);
 
         if self.message_offset > 0 {
-            let mut send_buffer = vec![0u8; self.message_offset];
+            let mut send_buffer = Vec::with_capacity(self.message_offset + data.len());
+            send_buffer.extend(iter::repeat_n(0, self.message_offset));
             send_buffer.extend(&data);
             self.socket.send(&send_buffer).await?;
         } else {
