@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    iter,
     net::Ipv4Addr,
     sync::{
         Arc,
@@ -54,6 +53,7 @@ pub struct EspCodec {
     dst: Ipv4Addr,
     seq_counter: AtomicU32,
     encap_type: EspEncapType,
+    out_spi: Option<u32>,
 }
 
 impl EspCodec {
@@ -64,6 +64,7 @@ impl EspCodec {
             dst,
             seq_counter: AtomicU32::new(1),
             encap_type,
+            out_spi: None,
         }
     }
 
@@ -72,11 +73,21 @@ impl EspCodec {
             .retain(|_, (timestamp, _)| (*timestamp + ttl) > Instant::now());
 
         self.params.insert(spi, (Instant::now(), params));
+        self.out_spi = Some(spi);
+        self.seq_counter.store(1, Ordering::SeqCst);
     }
 
     pub fn set_params(&mut self, spi: u32, params: Arc<EspCryptMaterial>) {
         self.params.clear();
         self.params.insert(spi, (Instant::now(), params));
+        self.out_spi = Some(spi);
+        self.seq_counter.store(1, Ordering::SeqCst);
+    }
+
+    fn current_outbound(&self) -> anyhow::Result<(u32, &Arc<EspCryptMaterial>)> {
+        let spi = self.out_spi.context("No ESP parameters")?;
+        let (_, params) = self.params.get(&spi).context("No ESP parameters")?;
+        Ok((spi, params))
     }
 
     pub fn decode(&self, data: &[u8]) -> anyhow::Result<Bytes> {
@@ -129,7 +140,11 @@ impl EspCodec {
         let (_, params) = self.params.get(&spi).context("Invalid SPI")?;
 
         let payload = esp.payload();
-        let (data, auth) = payload.split_at(payload.len() - params.auth_algorithm.hash_len());
+        let hash_len = params.auth_algorithm.hash_len();
+        if payload.len() < hash_len {
+            anyhow::bail!("ESP payload shorter than ICV");
+        }
+        let (data, auth) = payload.split_at(payload.len() - hash_len);
 
         self.verify(params, &[&spi.to_be_bytes(), &seq.to_be_bytes(), data], auth)?;
 
@@ -138,7 +153,7 @@ impl EspCodec {
     }
 
     fn encode_to_ip_udp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        let (spi, (_, params)) = self.params.iter().next().context("No ESP parameters")?;
+        let (spi, params) = self.current_outbound()?;
 
         let mut data = self.encrypt(params, data)?;
         let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
@@ -171,7 +186,7 @@ impl EspCodec {
         udp.set_length((data.len() + EspPacket::minimum_packet_size() + UdpPacket::minimum_packet_size()) as u16);
 
         let mut esp = MutableEspPacket::new(udp.payload_mut()).context("Invalid ESP packet")?;
-        esp.set_spi(*spi);
+        esp.set_spi(spi);
         esp.set_seq(next_seq);
         esp.set_payload(&data);
 
@@ -181,7 +196,7 @@ impl EspCodec {
     }
 
     fn encode_to_esp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        let (spi, (_, params)) = self.params.iter().next().context("No ESP parameters")?;
+        let (spi, params) = self.current_outbound()?;
 
         let mut data = self.encrypt(params, data)?;
         let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
@@ -191,7 +206,7 @@ impl EspCodec {
         let mut buffer = vec![0u8; data.len() + EspPacket::minimum_packet_size()];
 
         let mut esp = MutableEspPacket::new(&mut buffer).context("Invalid ESP packet")?;
-        esp.set_spi(*spi);
+        esp.set_spi(spi);
         esp.set_seq(next_seq);
         esp.set_payload(&data);
 
@@ -207,11 +222,12 @@ impl EspCodec {
 
         let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
 
-        let pad_len = cipher.block_size() - ((data.len() + 2) % cipher.block_size());
+        let block_size = cipher.block_size();
+        let pad_len = (block_size - ((data.len() + 2) % block_size)) % block_size;
 
         let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
         plain.extend(data);
-        plain.extend(iter::repeat_n(0, pad_len));
+        plain.extend(1..=pad_len as u8);
         plain.push(pad_len as u8);
         plain.push(4); // next header: IPIP
 
@@ -268,6 +284,10 @@ impl EspCodec {
 
         let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
 
+        if data.len() < iv_len + cipher.block_size() {
+            anyhow::bail!("ESP ciphertext too short");
+        }
+
         let mut out = vec![0u8; data.len() - iv_len + cipher.block_size()];
         let iv = &data[0..iv_len];
 
@@ -278,11 +298,17 @@ impl EspCodec {
         count += crypter.finalize(&mut out[count..])?;
 
         out.truncate(count);
+        if out.len() < 2 {
+            anyhow::bail!("ESP plaintext too short");
+        }
         let next_header = out[out.len() - 1];
         if next_header != 4 {
             anyhow::bail!("Invalid next header, should be IPIP");
         }
         let pad_len = out[out.len() - 2] as usize;
+        if out.len() < pad_len + 2 {
+            anyhow::bail!("Invalid ESP pad length");
+        }
         out.truncate(out.len() - pad_len - 2);
         Ok(out)
     }

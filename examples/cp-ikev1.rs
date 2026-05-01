@@ -1,3 +1,10 @@
+use std::{
+    io::{Write, stdin, stdout},
+    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
+    sync::LazyLock,
+    time::Duration,
+};
+
 use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
@@ -10,12 +17,6 @@ use isakmp::{
     transport::{TcptDataType, UdpTransport},
 };
 use regex::Regex;
-use std::sync::LazyLock;
-use std::{
-    io::{Write, stdin, stdout},
-    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
-    time::Duration,
-};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
