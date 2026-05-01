@@ -167,6 +167,7 @@ impl TcptTransport {
             (None, Some(address)) => {
                 debug!("Connecting to {}", address);
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await??;
+                stream.set_nodelay(true)?;
 
                 debug!("Connected, starting TCPT handshake");
                 stream.handshake(self.data_type).await?;
