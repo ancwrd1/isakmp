@@ -355,6 +355,11 @@ mod tests {
         let decoded = codec.decode_from_ip_udp(&encoded).unwrap();
 
         assert_eq!(decoded.as_ref(), data);
+
+        let encoded = codec.encode_to_esp(data).unwrap();
+        let decoded = codec.decode_from_esp(&encoded).unwrap();
+
+        assert_eq!(decoded.as_ref(), data);
     }
 
     #[test]
