@@ -45,11 +45,11 @@ pub struct OfficeMode {
 }
 
 pub trait IsakmpSession {
-    fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()>;
+    fn init_from_sa(&self, proposal: SaProposal) -> anyhow::Result<()>;
 
-    fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()>;
+    fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()>;
 
-    fn init_from_qm(&mut self, proposal: EspProposal) -> anyhow::Result<()>;
+    fn init_from_qm(&self, proposal: EspProposal) -> anyhow::Result<()>;
 
     fn cookie_i(&self) -> u64 {
         self.initiator().cookie
@@ -59,13 +59,13 @@ pub trait IsakmpSession {
         self.responder().cookie
     }
 
-    fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
+    fn encrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
 
-    fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
+    fn decrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
 
     fn cipher_block_size(&self) -> usize;
 
-    fn validate_message(&mut self, data: &[u8]) -> anyhow::Result<bool>;
+    fn validate_message(&self, data: &[u8]) -> anyhow::Result<bool>;
 
     fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes>;
 
@@ -89,7 +89,7 @@ pub trait IsakmpSession {
 
     fn session_keys(&self) -> Arc<SessionKeys>;
 
-    fn load(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode>;
+    fn load(&self, data: &[u8]) -> anyhow::Result<OfficeMode>;
 
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 

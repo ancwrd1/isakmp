@@ -1,11 +1,10 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
-use parking_lot::RwLock;
 use rand::random;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -25,96 +24,100 @@ const NONCE_SIZE: usize = 32;
 const MAX_RECEIVED_HASHES: usize = 1000;
 
 #[derive(Clone)]
-pub struct Ikev1Session(Arc<RwLock<Ikev1SessionImpl>>);
+pub struct Ikev1Session(Arc<Mutex<Ikev1SessionImpl>>);
 
 impl Ikev1Session {
     pub fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
-        Ok(Self(Arc::new(RwLock::new(Ikev1SessionImpl::new(
+        Ok(Self(Arc::new(Mutex::new(Ikev1SessionImpl::new(
             identity,
             session_type,
         )?))))
     }
+
+    fn inner(&self) -> MutexGuard<'_, Ikev1SessionImpl> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl IsakmpSession for Ikev1Session {
-    fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
-        self.0.write().init_from_sa(proposal)
+    fn init_from_sa(&self, proposal: SaProposal) -> anyhow::Result<()> {
+        self.inner().init_from_sa(proposal)
     }
 
-    fn init_from_ke(&mut self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
-        self.0.write().init_from_ke(public_key_r, nonce_r)
+    fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
+        self.inner().init_from_ke(public_key_r, nonce_r)
     }
 
-    fn init_from_qm(&mut self, proposal: EspProposal) -> anyhow::Result<()> {
-        self.0.write().init_from_qm(proposal)
+    fn init_from_qm(&self, proposal: EspProposal) -> anyhow::Result<()> {
+        self.inner().init_from_qm(proposal)
     }
 
-    fn encrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        self.0.write().encrypt_and_set_iv(data, id)
+    fn encrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.inner().encrypt_and_set_iv(data, id)
     }
 
-    fn decrypt_and_set_iv(&mut self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
-        self.0.write().decrypt_and_set_iv(data, id)
+    fn decrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+        self.inner().decrypt_and_set_iv(data, id)
     }
 
     fn cipher_block_size(&self) -> usize {
-        self.0.read().cipher_block_size()
+        self.inner().cipher_block_size()
     }
 
-    fn validate_message(&mut self, data: &[u8]) -> anyhow::Result<bool> {
-        self.0.write().validate_message(data)
+    fn validate_message(&self, data: &[u8]) -> anyhow::Result<bool> {
+        self.inner().validate_message(data)
     }
 
     fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {
-        self.0.read().hash(data)
+        self.inner().hash(data)
     }
 
     fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        self.0.read().hash_id_i(data)
+        self.inner().hash_id_i(data)
     }
 
     fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        self.0.read().hash_id_r(data)
+        self.inner().hash_id_r(data)
     }
 
     fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
-        self.0.read().verify_signature(hash, signature, cert)
+        self.inner().verify_signature(hash, signature, cert)
     }
 
     fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes> {
-        self.0.read().prf(key, data)
+        self.inner().prf(key, data)
     }
 
     fn esp_in(&self) -> Arc<EspCryptMaterial> {
-        self.0.read().esp_in()
+        self.inner().esp_in()
     }
 
     fn esp_out(&self) -> Arc<EspCryptMaterial> {
-        self.0.read().esp_out()
+        self.inner().esp_out()
     }
 
     fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>> {
-        self.0.read().client_certificate()
+        self.inner().client_certificate()
     }
 
     fn initiator(&self) -> Arc<EndpointData> {
-        self.0.read().initiator()
+        self.inner().initiator()
     }
 
     fn responder(&self) -> Arc<EndpointData> {
-        self.0.read().responder()
+        self.inner().responder()
     }
 
     fn session_keys(&self) -> Arc<SessionKeys> {
-        self.0.read().session_keys()
+        self.inner().session_keys()
     }
 
-    fn load(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode> {
-        self.0.write().load(data)
+    fn load(&self, data: &[u8]) -> anyhow::Result<OfficeMode> {
+        self.inner().load(data)
     }
 
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>> {
-        self.0.write().save(office_mode)
+        self.inner().save(office_mode)
     }
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
@@ -122,7 +125,7 @@ impl IsakmpSession for Ikev1Session {
     }
 
     fn hybrid_auth(&self) -> bool {
-        self.0.read().hybrid_auth
+        self.inner().hybrid_auth
     }
 }
 

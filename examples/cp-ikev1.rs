@@ -333,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
     let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
     udp.connect(format!("{address}:500")).await?;
 
-    let mut session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
+    let session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
     let office_mode = session.load(&saved)?;
     println!("Loaded office mode: {office_mode:#?}");
 
