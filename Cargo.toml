@@ -27,6 +27,9 @@ pnet_macros_support = "0.35"
 ipnet = "2"
 secrecy = "0.10"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
 [dev-dependencies]
 opener = "0.8"
 regex = "1"

@@ -1049,6 +1049,10 @@ pub enum Identity {
         key_id: Option<Bytes>,
         hybrid_auth: bool,
     },
+    #[cfg(windows)]
+    System {
+        common_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]

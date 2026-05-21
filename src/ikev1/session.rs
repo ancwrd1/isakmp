@@ -184,6 +184,11 @@ impl Ikev1SessionImpl {
                 hybrid_auth,
                 Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
             ),
+            #[cfg(windows)]
+            Identity::System { common_name } => (
+                true,
+                Some(Arc::new(crate::certs::windows::SystemCertificate::new(&common_name)?)),
+            ),
             Identity::None => (false, None),
         };
 

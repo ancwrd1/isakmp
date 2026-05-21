@@ -329,3 +329,281 @@ impl ClientCertificate for Pkcs11Certificate {
         Ok(session.sign(&Mechanism::RsaPkcs, key, data)?.into())
     }
 }
+
+#[cfg(windows)]
+pub mod windows {
+    use std::{mem, ptr, slice};
+
+    use anyhow::anyhow;
+    use bytes::Bytes;
+    use openssl::x509::X509;
+    use tracing::debug;
+    use windows_sys::Win32::{Foundation::GetLastError, Security::Cryptography::*};
+
+    use super::{CertList, ClientCertificate};
+
+    const HCCE_LOCAL_MACHINE: HCERTCHAINENGINE = 0x1 as HCERTCHAINENGINE;
+    const MY_ENCODING_TYPE: CERT_QUERY_ENCODING_TYPE = PKCS_7_ASN_ENCODING | X509_ASN_ENCODING;
+
+    pub struct SystemCertificate {
+        cert_context: *const CERT_CONTEXT,
+        key_handle: NCRYPT_KEY_HANDLE,
+        certs: CertList,
+    }
+
+    unsafe impl Send for SystemCertificate {}
+    unsafe impl Sync for SystemCertificate {}
+
+    impl SystemCertificate {
+        pub fn new(common_name: &str) -> anyhow::Result<Self> {
+            unsafe {
+                let store_name: Vec<u16> = "MY".encode_utf16().chain([0]).collect();
+
+                debug!("Opening LocalMachine MY certificate store");
+
+                let store = CertOpenStore(
+                    CERT_STORE_PROV_SYSTEM_W,
+                    0,
+                    HCRYPTPROV_LEGACY::default(),
+                    (CERT_SYSTEM_STORE_LOCAL_MACHINE_ID << CERT_SYSTEM_STORE_LOCATION_SHIFT)
+                        | CERT_STORE_OPEN_EXISTING_FLAG
+                        | CERT_STORE_READONLY_FLAG,
+                    store_name.as_ptr() as _,
+                );
+                if store.is_null() {
+                    return Err(win32_err("CertOpenStore"));
+                }
+
+                let pattern: Vec<u16> = common_name.encode_utf16().chain([0]).collect();
+
+                debug!("Searching for certificate with subject containing '{}'", common_name);
+
+                let found = CertFindCertificateInStore(
+                    store,
+                    MY_ENCODING_TYPE,
+                    0,
+                    CERT_FIND_SUBJECT_STR,
+                    pattern.as_ptr() as _,
+                    ptr::null(),
+                );
+
+                if found.is_null() {
+                    CertCloseStore(store, 0);
+                    return Err(anyhow!("No certificate matching '{}' in LocalMachine\\MY", common_name));
+                }
+
+                let cert_context = CertDuplicateCertificateContext(found);
+                CertCloseStore(store, 0);
+
+                let chain = match Self::build_chain(cert_context) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        CertFreeCertificateContext(cert_context);
+                        return Err(e);
+                    }
+                };
+
+                let mut x509_list = Vec::with_capacity(chain.len());
+                for der in &chain {
+                    match X509::from_der(der) {
+                        Ok(x) => x509_list.push(x),
+                        Err(e) => {
+                            CertFreeCertificateContext(cert_context);
+                            return Err(e.into());
+                        }
+                    }
+                }
+                let certs = CertList(x509_list);
+
+                debug!("Acquiring CNG private key (silent)");
+
+                let mut handle: HCRYPTPROV_OR_NCRYPT_KEY_HANDLE = 0;
+                let mut key_spec: CERT_KEY_SPEC = 0;
+                let ok = CryptAcquireCertificatePrivateKey(
+                    cert_context,
+                    CRYPT_ACQUIRE_SILENT_FLAG | CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG,
+                    ptr::null(),
+                    &mut handle,
+                    &mut key_spec,
+                    ptr::null_mut(),
+                );
+                if ok == 0 {
+                    let err = win32_err("CryptAcquireCertificatePrivateKey");
+                    CertFreeCertificateContext(cert_context);
+                    return Err(err);
+                }
+
+                let key_handle = handle as NCRYPT_KEY_HANDLE;
+
+                let group = match get_string_property(key_handle, NCRYPT_ALGORITHM_GROUP_PROPERTY) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        let _ = NCryptFreeObject(key_handle);
+                        CertFreeCertificateContext(cert_context);
+                        return Err(e);
+                    }
+                };
+                if group != "RSA" {
+                    let _ = NCryptFreeObject(key_handle);
+                    CertFreeCertificateContext(cert_context);
+                    return Err(anyhow!("Private key algorithm group is not RSA: {}", group));
+                }
+
+                Ok(Self {
+                    cert_context,
+                    key_handle,
+                    certs,
+                })
+            }
+        }
+
+        unsafe fn build_chain(ctx: *const CERT_CONTEXT) -> anyhow::Result<Vec<Vec<u8>>> {
+            unsafe {
+                let param: CERT_CHAIN_PARA = CERT_CHAIN_PARA {
+                    cbSize: mem::size_of::<CERT_CHAIN_PARA>() as u32,
+                    ..mem::zeroed()
+                };
+                let mut chain_ctx: *mut CERT_CHAIN_CONTEXT = ptr::null_mut();
+
+                let result = CertGetCertificateChain(
+                    HCCE_LOCAL_MACHINE,
+                    ctx,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    &param,
+                    0,
+                    ptr::null(),
+                    &mut chain_ctx,
+                );
+
+                let mut out = Vec::new();
+
+                if result != 0 && !chain_ctx.is_null() {
+                    if (*chain_ctx).cChain > 0 {
+                        let first = *(*chain_ctx).rgpChain;
+                        let elements = slice::from_raw_parts((*first).rgpElement, (*first).cElement as usize);
+                        for (idx, el) in elements.iter().enumerate() {
+                            if idx != 0 && ((**el).TrustStatus.dwInfoStatus & CERT_TRUST_IS_SELF_SIGNED) != 0 {
+                                break;
+                            }
+                            let c = (**el).pCertContext;
+                            let der = slice::from_raw_parts((*c).pbCertEncoded, (*c).cbCertEncoded as usize);
+                            out.push(der.to_vec());
+                        }
+                    }
+                    CertFreeCertificateChain(chain_ctx);
+                } else {
+                    let der = slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize);
+                    out.push(der.to_vec());
+                }
+
+                Ok(out)
+            }
+        }
+    }
+
+    impl Drop for SystemCertificate {
+        fn drop(&mut self) {
+            unsafe {
+                if self.key_handle != 0 {
+                    let _ = NCryptFreeObject(self.key_handle);
+                }
+                if !self.cert_context.is_null() {
+                    CertFreeCertificateContext(self.cert_context);
+                }
+            }
+        }
+    }
+
+    impl ClientCertificate for SystemCertificate {
+        fn issuer(&self) -> Bytes {
+            self.certs.issuer()
+        }
+
+        fn issuer_name(&self) -> String {
+            self.certs.issuer_name()
+        }
+
+        fn subject(&self) -> Bytes {
+            self.certs.subject()
+        }
+
+        fn subject_name(&self) -> String {
+            self.certs.subject_name()
+        }
+
+        fn fingerprint(&self) -> Bytes {
+            self.certs.fingerprint()
+        }
+
+        fn certs(&self) -> Vec<Bytes> {
+            self.certs.certs()
+        }
+
+        fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+            unsafe {
+                let flags = NCRYPT_SILENT_FLAG | NCRYPT_PAD_PKCS1_FLAG;
+                let mut needed: u32 = 0;
+
+                let status = NCryptEncrypt(
+                    self.key_handle,
+                    data.as_ptr(),
+                    data.len() as u32,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    0,
+                    &mut needed,
+                    flags,
+                );
+                if status != 0 {
+                    return Err(anyhow!("NCryptEncrypt(size) failed: 0x{:08x}", status));
+                }
+
+                let mut buf = vec![0u8; needed as usize];
+                let mut written: u32 = 0;
+                let status = NCryptEncrypt(
+                    self.key_handle,
+                    data.as_ptr(),
+                    data.len() as u32,
+                    ptr::null(),
+                    buf.as_mut_ptr(),
+                    buf.len() as u32,
+                    &mut written,
+                    flags,
+                );
+                if status != 0 {
+                    return Err(anyhow!("NCryptEncrypt failed: 0x{:08x}", status));
+                }
+
+                buf.truncate(written as usize);
+                Ok(Bytes::from(buf))
+            }
+        }
+    }
+
+    fn win32_err(label: &str) -> anyhow::Error {
+        let code = unsafe { GetLastError() };
+        anyhow!("{} failed: 0x{:08x}", label, code)
+    }
+
+    unsafe fn get_string_property(
+        key: NCRYPT_KEY_HANDLE,
+        property: windows_sys::core::PCWSTR,
+    ) -> anyhow::Result<String> {
+        unsafe {
+            let mut size: u32 = 0;
+            let status = NCryptGetProperty(key, property, ptr::null_mut(), 0, &mut size, 0);
+            if status != 0 {
+                return Err(anyhow!("NCryptGetProperty(size) failed: 0x{:08x}", status));
+            }
+            let mut buf = vec![0u8; size as usize];
+            let status = NCryptGetProperty(key, property, buf.as_mut_ptr(), buf.len() as u32, &mut size, 0);
+            if status != 0 {
+                return Err(anyhow!("NCryptGetProperty failed: 0x{:08x}", status));
+            }
+            let utf16 = slice::from_raw_parts(buf.as_ptr() as *const u16, buf.len() / 2);
+            let len = utf16.iter().position(|&c| c == 0).unwrap_or(utf16.len());
+            Ok(String::from_utf16_lossy(&utf16[..len]))
+        }
+    }
+}
