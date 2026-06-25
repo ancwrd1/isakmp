@@ -17,7 +17,7 @@ futures = "0.3"
 openssl = "0.10"
 async-trait = "0.1"
 tracing = "0.1"
-itertools = "0.14"
+itertools = "0.15"
 cryptoki = "0.12"
 serde = { version = "1.0.208", features = ["rc", "derive"] }
 rmp-serde = "1"
