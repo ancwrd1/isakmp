@@ -3,11 +3,7 @@ use std::{net::Ipv4Addr, sync::Arc};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    certs::ClientCertificate,
-    message::IsakmpMessageCodec,
-    model::{EspCryptMaterial, EspProposal, SaProposal},
-};
+use crate::{certs::ClientCertificate, message::IsakmpMessageCodec, model::EspCryptMaterial};
 
 #[derive(Default, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SessionType {
@@ -17,17 +13,8 @@ pub enum SessionType {
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct SessionKeys {
-    pub shared_secret: Bytes,
-    pub skeyid: Bytes,
-    pub skeyid_d: Bytes,
-    pub skeyid_a: Bytes,
-    pub skeyid_e: Bytes,
-}
-
-#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct EndpointData {
-    pub cookie: u64,
+    pub spi: u64,
     pub public_key: Bytes,
     pub nonce: Bytes,
     pub esp_nonce: Bytes,
@@ -44,38 +31,21 @@ pub struct OfficeMode {
     pub domains: Vec<String>,
 }
 
+/// Surface shared by every IKE version. Anything specific to a version's key
+/// schedule, message framing or exchange structure belongs on the concrete
+/// session type instead (see `Ikev1Session`).
 pub trait IsakmpSession {
-    fn init_from_sa(&self, proposal: SaProposal) -> anyhow::Result<()>;
+    fn initiator(&self) -> Arc<EndpointData>;
 
-    fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()>;
+    fn responder(&self) -> Arc<EndpointData>;
 
-    fn init_from_qm(&self, proposal: EspProposal) -> anyhow::Result<()>;
-
-    fn cookie_i(&self) -> u64 {
-        self.initiator().cookie
+    fn initiator_spi(&self) -> u64 {
+        self.initiator().spi
     }
 
-    fn cookie_r(&self) -> u64 {
-        self.responder().cookie
+    fn responder_spi(&self) -> u64 {
+        self.responder().spi
     }
-
-    fn encrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
-
-    fn decrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes>;
-
-    fn cipher_block_size(&self) -> usize;
-
-    fn validate_message(&self, data: &[u8]) -> anyhow::Result<bool>;
-
-    fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes>;
-
-    fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes>;
-
-    fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes>;
-
-    fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()>;
-
-    fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes>;
 
     fn esp_in(&self) -> Arc<EspCryptMaterial>;
 
@@ -83,17 +53,9 @@ pub trait IsakmpSession {
 
     fn client_certificate(&self) -> Option<Arc<dyn ClientCertificate + Send + Sync>>;
 
-    fn initiator(&self) -> Arc<EndpointData>;
-
-    fn responder(&self) -> Arc<EndpointData>;
-
-    fn session_keys(&self) -> Arc<SessionKeys>;
-
     fn load(&self, data: &[u8]) -> anyhow::Result<OfficeMode>;
 
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
-
-    fn hybrid_auth(&self) -> bool;
 }

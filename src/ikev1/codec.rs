@@ -5,18 +5,18 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::trace;
 
 use crate::{
+    ikev1::session::Ikev1Session,
     message::{IsakmpMessage, IsakmpMessageCodec},
     model::{ExchangeType, IsakmpFlags, PayloadType},
     payload::Payload,
-    session::IsakmpSession,
 };
 
 pub struct Ikev1Codec {
-    session: Box<dyn IsakmpSession + Send + Sync>,
+    session: Ikev1Session,
 }
 
 impl Ikev1Codec {
-    pub fn new(session: Box<dyn IsakmpSession + Send + Sync>) -> Self {
+    pub fn new(session: Ikev1Session) -> Self {
         Self { session }
     }
 }
@@ -45,8 +45,8 @@ impl IsakmpMessageCodec for Ikev1Codec {
         };
 
         let mut buf = BytesMut::new();
-        buf.put_u64(message.cookie_i);
-        buf.put_u64(message.cookie_r);
+        buf.put_u64(message.initiator_spi);
+        buf.put_u64(message.responder_spi);
 
         buf.put_u8(message.next_payload(0));
         buf.put_u8(0x10);
@@ -67,8 +67,8 @@ impl IsakmpMessageCodec for Ikev1Codec {
 
         let mut reader = Cursor::new(data);
 
-        let cookie_i = reader.read_u64::<BigEndian>()?;
-        let cookie_r = reader.read_u64::<BigEndian>()?;
+        let spi_i = reader.read_u64::<BigEndian>()?;
+        let spi_r = reader.read_u64::<BigEndian>()?;
 
         let next_payload: PayloadType = reader.read_u8()?.into();
         let version = reader.read_u8()?;
@@ -89,8 +89,8 @@ impl IsakmpMessageCodec for Ikev1Codec {
         let payloads = Payload::parse_all(next_payload, &mut cursor)?;
 
         Ok(Some(IsakmpMessage {
-            cookie_i,
-            cookie_r,
+            initiator_spi: spi_i,
+            responder_spi: spi_r,
             version,
             exchange_type,
             flags,

@@ -15,8 +15,8 @@ pub trait IsakmpMessageCodec {
 
 #[derive(Debug, Clone)]
 pub struct IsakmpMessage {
-    pub cookie_i: u64,
-    pub cookie_r: u64,
+    pub initiator_spi: u64,
+    pub responder_spi: u64,
     pub version: u8,
     pub exchange_type: ExchangeType,
     pub flags: IsakmpFlags,

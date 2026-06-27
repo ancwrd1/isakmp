@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         session.new_codec(),
     ));
 
-    let mut service = Ikev1Service::new(transport, Box::new(session))?;
+    let mut service = Ikev1Service::new(transport, session)?;
 
     let proposal = service.do_sa_proposal(Duration::from_secs(120)).await?;
 
@@ -338,7 +338,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Loaded office mode: {office_mode:#?}");
 
     let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
-    let mut service = Ikev1Service::new(transport, Box::new(session))?;
+    let mut service = Ikev1Service::new(transport, session)?;
 
     let om_reply = service
         .send_om_request(Some(Ipv4Net::with_netmask(ipv4addr, netmask)?), None)

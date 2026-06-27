@@ -16,12 +16,23 @@ use crate::{
     ikev1::codec::Ikev1Codec,
     message::IsakmpMessageCodec,
     model::*,
-    session::{EndpointData, IsakmpSession, OfficeMode, SessionKeys, SessionType},
+    session::{EndpointData, IsakmpSession, OfficeMode, SessionType},
 };
 
 // RFC 2409 recommended nonce size
 const NONCE_SIZE: usize = 32;
 const MAX_RECEIVED_HASHES: usize = 1000;
+
+/// IKEv1 key schedule (RFC 2409 §5). IKEv2 derives an entirely different set
+/// (`SK_d`, `SK_a{i,r}`, `SK_e{i,r}`, `SK_p{i,r}`) and gets its own type.
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct SessionKeys {
+    pub shared_secret: Bytes,
+    pub skeyid: Bytes,
+    pub skeyid_d: Bytes,
+    pub skeyid_a: Bytes,
+    pub skeyid_e: Bytes,
+}
 
 #[derive(Clone)]
 pub struct Ikev1Session(Arc<Mutex<Ikev1SessionImpl>>);
@@ -37,55 +48,71 @@ impl Ikev1Session {
     fn inner(&self) -> MutexGuard<'_, Ikev1SessionImpl> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
-}
 
-impl IsakmpSession for Ikev1Session {
-    fn init_from_sa(&self, proposal: SaProposal) -> anyhow::Result<()> {
+    pub fn init_from_sa(&self, proposal: SaProposal) -> anyhow::Result<()> {
         self.inner().init_from_sa(proposal)
     }
 
-    fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
+    pub fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
         self.inner().init_from_ke(public_key_r, nonce_r)
     }
 
-    fn init_from_qm(&self, proposal: EspProposal) -> anyhow::Result<()> {
+    pub fn init_from_qm(&self, proposal: EspProposal) -> anyhow::Result<()> {
         self.inner().init_from_qm(proposal)
     }
 
-    fn encrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+    pub fn encrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         self.inner().encrypt_and_set_iv(data, id)
     }
 
-    fn decrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
+    pub fn decrypt_and_set_iv(&self, data: &[u8], id: u32) -> anyhow::Result<Bytes> {
         self.inner().decrypt_and_set_iv(data, id)
     }
 
-    fn cipher_block_size(&self) -> usize {
+    pub fn cipher_block_size(&self) -> usize {
         self.inner().cipher_block_size()
     }
 
-    fn validate_message(&self, data: &[u8]) -> anyhow::Result<bool> {
+    pub fn validate_message(&self, data: &[u8]) -> anyhow::Result<bool> {
         self.inner().validate_message(data)
     }
 
-    fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {
+    pub fn hash(&self, data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.inner().hash(data)
     }
 
-    fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+    pub fn hash_id_i(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         self.inner().hash_id_i(data)
     }
 
-    fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+    pub fn hash_id_r(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         self.inner().hash_id_r(data)
     }
 
-    fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
+    pub fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
         self.inner().verify_signature(hash, signature, cert)
     }
 
-    fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes> {
+    pub fn prf(&self, key: &[u8], data: &[&[u8]]) -> anyhow::Result<Bytes> {
         self.inner().prf(key, data)
+    }
+
+    pub fn session_keys(&self) -> Arc<SessionKeys> {
+        self.inner().session_keys()
+    }
+
+    pub fn hybrid_auth(&self) -> bool {
+        self.inner().hybrid_auth
+    }
+}
+
+impl IsakmpSession for Ikev1Session {
+    fn initiator(&self) -> Arc<EndpointData> {
+        self.inner().initiator()
+    }
+
+    fn responder(&self) -> Arc<EndpointData> {
+        self.inner().responder()
     }
 
     fn esp_in(&self) -> Arc<EspCryptMaterial> {
@@ -100,18 +127,6 @@ impl IsakmpSession for Ikev1Session {
         self.inner().client_certificate()
     }
 
-    fn initiator(&self) -> Arc<EndpointData> {
-        self.inner().initiator()
-    }
-
-    fn responder(&self) -> Arc<EndpointData> {
-        self.inner().responder()
-    }
-
-    fn session_keys(&self) -> Arc<SessionKeys> {
-        self.inner().session_keys()
-    }
-
     fn load(&self, data: &[u8]) -> anyhow::Result<OfficeMode> {
         self.inner().load(data)
     }
@@ -121,11 +136,7 @@ impl IsakmpSession for Ikev1Session {
     }
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
-        Box::new(Ikev1Codec::new(Box::new(self.clone())))
-    }
-
-    fn hybrid_auth(&self) -> bool {
-        self.inner().hybrid_auth
+        Box::new(Ikev1Codec::new(self.clone()))
     }
 }
 
@@ -194,7 +205,7 @@ impl Ikev1SessionImpl {
 
         let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, GroupType::Oakley2)?;
 
-        let (cookie_i, cookie_r) = match session_type {
+        let (spi_i, spi_r) = match session_type {
             SessionType::Initiator => (random(), 0),
             SessionType::Responder => (0, random()),
         };
@@ -205,12 +216,12 @@ impl Ikev1SessionImpl {
             crypto,
             client_cert,
             initiator: Arc::new(EndpointData {
-                cookie: cookie_i,
+                spi: spi_i,
                 nonce: Bytes::copy_from_slice(&random::<[u8; NONCE_SIZE]>()),
                 ..Default::default()
             }),
             responder: Arc::new(EndpointData {
-                cookie: cookie_r,
+                spi: spi_r,
                 nonce: Bytes::copy_from_slice(&random::<[u8; NONCE_SIZE]>()),
                 ..Default::default()
             }),
@@ -303,24 +314,24 @@ impl Ikev1SessionImpl {
         match self.session_type {
             SessionType::Initiator => {
                 self.responder = Arc::new(EndpointData {
-                    cookie: proposal.cookie_r,
+                    spi: proposal.responder_spi,
                     ..(*self.responder).clone()
                 });
 
                 self.initiator = Arc::new(EndpointData {
-                    cookie: proposal.cookie_i,
+                    spi: proposal.initiator_spi,
                     public_key: self.crypto.public_key(),
                     ..(*self.initiator).clone()
                 });
             }
             SessionType::Responder => {
                 self.initiator = Arc::new(EndpointData {
-                    cookie: proposal.cookie_i,
+                    spi: proposal.initiator_spi,
                     ..(*self.initiator).clone()
                 });
 
                 self.responder = Arc::new(EndpointData {
-                    cookie: proposal.cookie_r,
+                    spi: proposal.responder_spi,
                     public_key: self.crypto.public_key(),
                     ..(*self.responder).clone()
                 });
@@ -376,8 +387,8 @@ impl Ikev1SessionImpl {
                 [
                     seed.as_ref(),
                     self.session_keys.shared_secret.as_ref(),
-                    &self.initiator.cookie.to_be_bytes(),
-                    &self.responder.cookie.to_be_bytes(),
+                    &self.initiator.spi.to_be_bytes(),
+                    &self.responder.spi.to_be_bytes(),
                     &[i],
                 ],
             )?;
@@ -503,8 +514,8 @@ impl Ikev1SessionImpl {
             [
                 self.initiator.public_key.as_ref(),
                 self.responder.public_key.as_ref(),
-                &self.initiator.cookie.to_be_bytes(),
-                &self.responder.cookie.to_be_bytes(),
+                &self.initiator.spi.to_be_bytes(),
+                &self.responder.spi.to_be_bytes(),
                 self.sa_bytes.as_ref(),
                 data,
             ],
@@ -518,8 +529,8 @@ impl Ikev1SessionImpl {
             [
                 self.responder.public_key.as_ref(),
                 self.initiator.public_key.as_ref(),
-                &self.responder.cookie.to_be_bytes(),
-                &self.initiator.cookie.to_be_bytes(),
+                &self.responder.spi.to_be_bytes(),
+                &self.initiator.spi.to_be_bytes(),
                 self.sa_bytes.as_ref(),
                 data,
             ],

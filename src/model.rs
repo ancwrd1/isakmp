@@ -1066,8 +1066,8 @@ pub struct EspCryptMaterial {
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct SaProposal {
-    pub cookie_i: u64,
-    pub cookie_r: u64,
+    pub initiator_spi: u64,
+    pub responder_spi: u64,
     pub sa_bytes: Bytes,
     pub hash_alg: IkeHashAlgorithm,
     pub enc_alg: IkeEncryptionAlgorithm,
@@ -1079,8 +1079,8 @@ pub struct SaProposal {
 impl fmt::Display for SaProposal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SaProposal")
-            .field("cookie_i", &self.cookie_i)
-            .field("cookie_r", &self.cookie_r)
+            .field("initiator_spi", &self.initiator_spi)
+            .field("responder_spi", &self.responder_spi)
             .field("hash_alg", &self.hash_alg)
             .field("enc_alg", &self.enc_alg)
             .field("key_len", &self.key_len)

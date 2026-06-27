@@ -10,6 +10,7 @@ use tracing::{debug, trace};
 
 use crate::{
     certs::CertList,
+    ikev1::session::Ikev1Session,
     message::{IKEV1_VERSION, IsakmpMessage},
     model::*,
     payload::*,
@@ -34,14 +35,11 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
 pub struct Ikev1Service {
     socket_timeout: Duration,
     transport: Box<dyn IsakmpTransport + Send + Sync>,
-    session: Box<dyn IsakmpSession + Send + Sync>,
+    session: Ikev1Session,
 }
 
 impl Ikev1Service {
-    pub fn new(
-        transport: Box<dyn IsakmpTransport + Send + Sync>,
-        session: Box<dyn IsakmpSession + Send + Sync>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(transport: Box<dyn IsakmpTransport + Send + Sync>, session: Ikev1Session) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -49,8 +47,8 @@ impl Ikev1Service {
         })
     }
 
-    pub fn session(&mut self) -> &mut dyn IsakmpSession {
-        &mut *self.session
+    pub fn session(&mut self) -> &mut Ikev1Session {
+        &mut self.session
     }
 
     fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
@@ -134,8 +132,8 @@ impl Ikev1Service {
         ];
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: 0,
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: 0,
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
@@ -230,8 +228,8 @@ impl Ikev1Service {
         )?;
 
         let message = IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
@@ -250,16 +248,16 @@ impl Ikev1Service {
             protocol_id: ProtocolId::Isakmp,
             spi_size: 16,
             spi: vec![
-                Bytes::copy_from_slice(self.session.cookie_i().to_be_bytes().as_slice()),
-                Bytes::copy_from_slice(self.session.cookie_r().to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(self.session.initiator_spi().to_be_bytes().as_slice()),
+                Bytes::copy_from_slice(self.session.responder_spi().to_be_bytes().as_slice()),
             ],
         });
 
         let hash_payload = self.make_hash_from_payloads(message_id, &[&delete_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Informational,
             flags: IsakmpFlags::empty(),
@@ -275,8 +273,8 @@ impl Ikev1Service {
         let remote_ip: u32 = gateway_ip.into();
 
         let hash_r = self.session.hash(&[
-            self.session.cookie_i().to_be_bytes().as_slice(),
-            self.session.cookie_r().to_be_bytes().as_slice(),
+            self.session.initiator_spi().to_be_bytes().as_slice(),
+            self.session.responder_spi().to_be_bytes().as_slice(),
             remote_ip.to_be_bytes().as_slice(),
             4500u16.to_be_bytes().as_slice(),
         ])?;
@@ -286,8 +284,8 @@ impl Ikev1Service {
         let local_ip: u32 = local_ip.into();
 
         let hash_i = self.session.hash(&[
-            self.session.cookie_i().to_be_bytes().as_slice(),
-            self.session.cookie_r().to_be_bytes().as_slice(),
+            self.session.initiator_spi().to_be_bytes().as_slice(),
+            self.session.responder_spi().to_be_bytes().as_slice(),
             local_ip.to_be_bytes().as_slice(),
             &[0, 0],
         ])?;
@@ -312,8 +310,8 @@ impl Ikev1Service {
         }
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::empty(),
@@ -344,10 +342,10 @@ impl Ikev1Service {
             message_type: NotifyMessageType::CccAuth,
             spi: self
                 .session
-                .cookie_i()
+                .initiator_spi()
                 .to_be_bytes()
                 .into_iter()
-                .chain(self.session.responder().cookie.to_be_bytes())
+                .chain(self.session.responder().spi.to_be_bytes())
                 .collect(),
             data: Bytes::copy_from_slice(identity_request.auth_blob.as_bytes()),
         });
@@ -394,8 +392,8 @@ impl Ikev1Service {
         };
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::IdentityProtection,
             flags: IsakmpFlags::ENCRYPTION,
@@ -423,8 +421,8 @@ impl Ikev1Service {
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -443,8 +441,8 @@ impl Ikev1Service {
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -498,8 +496,8 @@ impl Ikev1Service {
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
         Ok(IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Transaction,
             flags: IsakmpFlags::ENCRYPTION,
@@ -628,8 +626,8 @@ impl Ikev1Service {
         debug!("Negotiated SA lifetime: {}", lifetime);
 
         let proposal = SaProposal {
-            cookie_i: response.cookie_i,
-            cookie_r: response.cookie_r,
+            initiator_spi: response.initiator_spi,
+            responder_spi: response.responder_spi,
             sa_bytes,
             hash_alg,
             enc_alg,
@@ -672,7 +670,7 @@ impl Ikev1Service {
 
         self.session.init_from_ke(public_key_r, nonce_r)?;
 
-        trace!("COOKIE_i: {:08x}", self.session.cookie_i());
+        trace!("SPI_i: {:016x}", self.session.initiator_spi());
         trace!("SKEYID_e: {}", hex::encode(&self.session.session_keys().skeyid_e));
 
         debug!("End key exchange");
@@ -685,7 +683,7 @@ impl Ikev1Service {
 
         let message_id = attr_response.message_id;
 
-        debug!("Attributes message ID: {:04x}", message_id);
+        debug!("Attributes message ID: {:08x}", message_id);
 
         Ok((get_attributes_payload(attr_response)?, message_id))
     }
@@ -805,11 +803,11 @@ impl Ikev1Service {
             .send_receive(&message, timeout.unwrap_or(self.socket_timeout))
             .await?;
         let message_id = response.message_id;
-        debug!("Message ID: {:04x}", message_id);
+        debug!("Message ID: {:08x}", message_id);
 
         let config = get_attributes_payload(response)?;
 
-        debug!("Response message ID: {:04x}", message_id);
+        debug!("Response message ID: {:08x}", message_id);
 
         Ok((config, message_id))
     }
@@ -929,8 +927,8 @@ impl Ikev1Service {
         debug!("Negotiated ESP key length: {}", key_len);
 
         let hash_msg = IsakmpMessage {
-            cookie_i: self.session.cookie_i(),
-            cookie_r: self.session.cookie_r(),
+            initiator_spi: self.session.initiator_spi(),
+            responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
             exchange_type: ExchangeType::Quick,
             flags: IsakmpFlags::ENCRYPTION,
@@ -956,13 +954,13 @@ impl Ikev1Service {
         let esp_in = self.session.esp_in();
         let esp_out = self.session.esp_out();
 
-        trace!("IN  SPI : {:04x}", esp_in.spi);
+        trace!("IN  SPI : {:08x}", esp_in.spi);
         trace!("IN  ENC : {}", hex::encode(&esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&esp_in.sk_a));
         trace!("IN  KEYL: {}", esp_in.sk_e.len());
         trace!("IN  EALG: {:?}", esp_in.transform_id);
         trace!("IN  AALG: {:?}", esp_in.auth_algorithm);
-        trace!("OUT SPI : {:04x}", esp_out.spi);
+        trace!("OUT SPI : {:08x}", esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&esp_out.sk_a));
         trace!("OUT KEYL: {}", esp_out.sk_e.len());
