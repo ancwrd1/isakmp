@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
+    time::SystemTime,
 };
 
 use anyhow::{Context, anyhow};
@@ -138,6 +139,10 @@ impl IsakmpSession for Ikev1Session {
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
         Box::new(Ikev1Codec::new(self.clone()))
     }
+
+    fn timestamp(&self) -> u64 {
+        self.inner().timestamp
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -152,6 +157,7 @@ struct Ikev1SessionStore {
     digest_type: DigestType,
     cipher_type: CipherType,
     group_type: GroupType,
+    timestamp: u64,
 }
 
 struct Ikev1SessionImpl {
@@ -167,6 +173,7 @@ struct Ikev1SessionImpl {
     received_hashes: VecDeque<Bytes>,
     esp_in: Arc<EspCryptMaterial>,
     esp_out: Arc<EspCryptMaterial>,
+    timestamp: u64,
 }
 
 impl Ikev1SessionImpl {
@@ -231,6 +238,7 @@ impl Ikev1SessionImpl {
             received_hashes: VecDeque::new(),
             esp_in: Arc::default(),
             esp_out: Arc::default(),
+            timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs(),
         })
     }
 
@@ -579,6 +587,7 @@ impl Ikev1SessionImpl {
         self.sa_bytes = store.sa_bytes;
         self.received_hashes = store.received_hashes;
         self.crypto = Crypto::with_parameters(store.digest_type, store.cipher_type, store.group_type)?;
+        self.timestamp = store.timestamp;
 
         Ok(store.office_mode)
     }
@@ -595,8 +604,234 @@ impl Ikev1SessionImpl {
             digest_type: self.crypto.digest_type(),
             cipher_type: self.crypto.cipher_type(),
             group_type: self.crypto.group_type(),
+            timestamp: self.timestamp,
         };
 
         Ok(rmp_serde::to_vec(&store)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    fn office_mode() -> OfficeMode {
+        OfficeMode {
+            ccc_session: "deadbeef".to_owned(),
+            username: "user".to_owned(),
+            ip_address: Ipv4Addr::new(10, 0, 0, 2),
+            netmask: Ipv4Addr::new(255, 255, 255, 0),
+            dns: vec![Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(8, 8, 8, 8)],
+            domains: vec!["example.com".to_owned(), "vpn.example.com".to_owned()],
+        }
+    }
+
+    /// Session with a completed phase 1 and phase 2 exchange against a synthetic peer.
+    fn established_session(
+        hash_alg: IkeHashAlgorithm,
+        enc_alg: IkeEncryptionAlgorithm,
+        key_len: usize,
+        group: IkeGroupDescription,
+        peer_group: GroupType,
+    ) -> Ikev1Session {
+        let session = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+
+        session
+            .init_from_sa(SaProposal {
+                initiator_spi: session.initiator_spi(),
+                responder_spi: 0x1122334455667788,
+                sa_bytes: Bytes::from_static(b"sa bytes"),
+                hash_alg,
+                enc_alg,
+                key_len,
+                group,
+                ..Default::default()
+            })
+            .unwrap();
+
+        // synthetic responder KE payload
+        let peer = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, peer_group).unwrap();
+
+        session
+            .init_from_ke(peer.public_key(), Bytes::from_static(&[0x42; NONCE_SIZE]))
+            .unwrap();
+
+        session
+            .init_from_qm(EspProposal {
+                spi_i: 0xaabbccdd,
+                nonce_i: Bytes::from_static(&[1; NONCE_SIZE]),
+                spi_r: 0x11223344,
+                nonce_r: Bytes::from_static(&[2; NONCE_SIZE]),
+                transform_id: TransformId::EspAesCbc,
+                auth_alg: EspAuthAlgorithm::HmacSha256v2,
+                key_len: 32,
+            })
+            .unwrap();
+
+        session
+    }
+
+    fn default_session() -> Ikev1Session {
+        established_session(
+            IkeHashAlgorithm::Sha256,
+            IkeEncryptionAlgorithm::AesCbc,
+            32,
+            IkeGroupDescription::Oakley2,
+            GroupType::Oakley2,
+        )
+    }
+
+    #[test]
+    fn test_save_load_roundtrip() {
+        let session = default_session();
+        let saved = session.save(&office_mode()).unwrap();
+
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        let restored = loaded.load(&saved).unwrap();
+
+        let om = office_mode();
+        assert_eq!(restored.ccc_session, om.ccc_session);
+        assert_eq!(restored.username, om.username);
+        assert_eq!(restored.ip_address, om.ip_address);
+        assert_eq!(restored.netmask, om.netmask);
+        assert_eq!(restored.dns, om.dns);
+        assert_eq!(restored.domains, om.domains);
+
+        assert_eq!(loaded.initiator_spi(), session.initiator_spi());
+        assert_eq!(loaded.responder_spi(), session.responder_spi());
+        assert_eq!(loaded.initiator().nonce, session.initiator().nonce);
+        assert_eq!(loaded.initiator().public_key, session.initiator().public_key);
+        assert_eq!(loaded.initiator().esp_spi, session.initiator().esp_spi);
+        assert_eq!(loaded.initiator().esp_nonce, session.initiator().esp_nonce);
+        assert_eq!(loaded.responder().nonce, session.responder().nonce);
+        assert_eq!(loaded.responder().public_key, session.responder().public_key);
+        assert_eq!(loaded.responder().esp_spi, session.responder().esp_spi);
+        assert_eq!(loaded.responder().esp_nonce, session.responder().esp_nonce);
+        assert_eq!(loaded.timestamp(), session.timestamp());
+
+        let keys = session.session_keys();
+        let loaded_keys = loaded.session_keys();
+        assert_eq!(loaded_keys.shared_secret, keys.shared_secret);
+        assert_eq!(loaded_keys.skeyid, keys.skeyid);
+        assert_eq!(loaded_keys.skeyid_d, keys.skeyid_d);
+        assert_eq!(loaded_keys.skeyid_a, keys.skeyid_a);
+        assert_eq!(loaded_keys.skeyid_e, keys.skeyid_e);
+    }
+
+    #[test]
+    fn test_load_restores_crypto_parameters() {
+        let session = established_session(
+            IkeHashAlgorithm::Sha512,
+            IkeEncryptionAlgorithm::AesCbc,
+            16,
+            IkeGroupDescription::Oakley14,
+            GroupType::Oakley14,
+        );
+        let saved = session.save(&office_mode()).unwrap();
+
+        // the fresh session defaults to SHA256/AES256/Oakley2, so any match must come from the store
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded.load(&saved).unwrap();
+
+        assert_eq!(loaded.cipher_block_size(), session.cipher_block_size());
+        assert_eq!(loaded.hash(&[b"data"]).unwrap().len(), 64);
+        assert_eq!(loaded.hash(&[b"data"]).unwrap(), session.hash(&[b"data"]).unwrap());
+        assert_eq!(loaded.session_keys().skeyid_e.len(), 16);
+    }
+
+    #[test]
+    fn test_load_restores_iv_state() {
+        let session = default_session();
+        let data = [7u8; 32];
+
+        // saved with only the phase 1 zero IV in place
+        let saved_before = session.save(&office_mode()).unwrap();
+
+        let encrypted = session.encrypt_and_set_iv(&data, 1).unwrap();
+
+        // a session restored from that point derives the same per-message IV
+        let loaded_before = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded_before.load(&saved_before).unwrap();
+        assert_eq!(loaded_before.decrypt_and_set_iv(&encrypted, 1).unwrap(), Bytes::copy_from_slice(&data));
+
+        // saved after the IV of message 1 has been advanced by the encryption
+        let saved_after = session.save(&office_mode()).unwrap();
+
+        let loaded_after = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded_after.load(&saved_after).unwrap();
+
+        // both sessions must produce the same next ciphertext for the same message id
+        assert_eq!(
+            loaded_after.encrypt_and_set_iv(&data, 1).unwrap(),
+            session.encrypt_and_set_iv(&data, 1).unwrap()
+        );
+
+        // and an unseen message id still derives its IV from the restored zero IV
+        assert_eq!(
+            loaded_after.encrypt_and_set_iv(&data, 2).unwrap(),
+            loaded_before.encrypt_and_set_iv(&data, 2).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_load_restores_received_hashes() {
+        let session = default_session();
+
+        assert!(session.validate_message(b"first message").unwrap());
+        assert!(!session.validate_message(b"first message").unwrap());
+
+        let saved = session.save(&office_mode()).unwrap();
+
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded.load(&saved).unwrap();
+
+        assert!(!loaded.validate_message(b"first message").unwrap());
+        assert!(loaded.validate_message(b"second message").unwrap());
+    }
+
+    #[test]
+    fn test_load_restores_sa_bytes() {
+        let session = default_session();
+        let saved = session.save(&office_mode()).unwrap();
+
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded.load(&saved).unwrap();
+
+        // HASH_I/HASH_R fold in SA bytes, SPIs, public keys and SKEYID
+        assert_eq!(loaded.hash_id_i(b"id").unwrap(), session.hash_id_i(b"id").unwrap());
+        assert_eq!(loaded.hash_id_r(b"id").unwrap(), session.hash_id_r(b"id").unwrap());
+    }
+
+    #[test]
+    fn test_load_rejects_invalid_data() {
+        let session = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        assert!(session.load(b"not a msgpack session").is_err());
+        assert!(session.load(&[]).is_err());
+    }
+
+    #[test]
+    fn test_load_rejects_truncated_data() {
+        let session = default_session();
+        let saved = session.save(&office_mode()).unwrap();
+
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        assert!(loaded.load(&saved[..saved.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn test_save_does_not_persist_esp_material() {
+        // ESP keys are re-derived by a fresh quick mode after a reconnect
+        let session = default_session();
+        assert!(!session.esp_in().sk_e.is_empty());
+
+        let saved = session.save(&office_mode()).unwrap();
+
+        let loaded = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
+        loaded.load(&saved).unwrap();
+
+        assert!(loaded.esp_in().sk_e.is_empty());
+        assert!(loaded.esp_out().sk_e.is_empty());
     }
 }
