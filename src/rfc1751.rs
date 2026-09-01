@@ -13,7 +13,7 @@ pub fn key_to_english(key: [u8; 16]) -> Vec<&'static str> {
 
         subkey_bin.push_str(&format!("{:08b}", (checksum << 6) & 255));
 
-        for chunk11 in subkey_bin.as_bytes().chunks_exact(11) {
+        for chunk11 in subkey_bin.as_bytes().as_chunks::<11>().0 {
             let num = bin2num(chunk11);
             result.push(WORDLIST[num as usize]);
         }
