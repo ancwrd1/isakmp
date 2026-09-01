@@ -754,7 +754,10 @@ mod tests {
         // a session restored from that point derives the same per-message IV
         let loaded_before = Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap();
         loaded_before.load(&saved_before).unwrap();
-        assert_eq!(loaded_before.decrypt_and_set_iv(&encrypted, 1).unwrap(), Bytes::copy_from_slice(&data));
+        assert_eq!(
+            loaded_before.decrypt_and_set_iv(&encrypted, 1).unwrap(),
+            Bytes::copy_from_slice(&data)
+        );
 
         // saved after the IV of message 1 has been advanced by the encryption
         let saved_after = session.save(&office_mode()).unwrap();
