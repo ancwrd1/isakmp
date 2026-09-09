@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, anyhow};
@@ -157,6 +157,7 @@ struct Ikev1SessionStore {
     digest_type: DigestType,
     cipher_type: CipherType,
     group_type: GroupType,
+    lifetime: Duration,
     timestamp: u64,
 }
 
@@ -173,6 +174,7 @@ struct Ikev1SessionImpl {
     received_hashes: VecDeque<Bytes>,
     esp_in: Arc<EspCryptMaterial>,
     esp_out: Arc<EspCryptMaterial>,
+    lifetime: Duration,
     timestamp: u64,
 }
 
@@ -238,6 +240,7 @@ impl Ikev1SessionImpl {
             received_hashes: VecDeque::new(),
             esp_in: Arc::default(),
             esp_out: Arc::default(),
+            lifetime: Duration::default(),
             timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs(),
         })
     }
@@ -295,6 +298,7 @@ impl Ikev1SessionImpl {
 
     fn init_from_sa(&mut self, proposal: SaProposal) -> anyhow::Result<()> {
         self.sa_bytes = proposal.sa_bytes;
+        self.lifetime = proposal.lifetime;
 
         let digest = match proposal.hash_alg {
             IkeHashAlgorithm::Md5 => DigestType::Md5,
@@ -587,6 +591,7 @@ impl Ikev1SessionImpl {
         self.sa_bytes = store.sa_bytes;
         self.received_hashes = store.received_hashes;
         self.crypto = Crypto::with_parameters(store.digest_type, store.cipher_type, store.group_type)?;
+        self.lifetime = store.lifetime;
         self.timestamp = store.timestamp;
 
         Ok(store.office_mode)
@@ -604,6 +609,7 @@ impl Ikev1SessionImpl {
             digest_type: self.crypto.digest_type(),
             cipher_type: self.crypto.cipher_type(),
             group_type: self.crypto.group_type(),
+            lifetime: self.lifetime,
             timestamp: self.timestamp,
         };
 
