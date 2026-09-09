@@ -143,6 +143,10 @@ impl IsakmpSession for Ikev1Session {
     fn timestamp(&self) -> u64 {
         self.inner().timestamp
     }
+
+    fn lifetime(&self) -> Duration {
+        self.inner().lifetime
+    }
 }
 
 #[derive(Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, sync::Arc};
+use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -58,5 +58,8 @@ pub trait IsakmpSession {
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 
     fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
+
     fn timestamp(&self) -> u64;
+
+    fn lifetime(&self) -> Duration;
 }
