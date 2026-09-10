@@ -1,22 +1,28 @@
-use std::{
-    io::{Write, stdin, stdout},
-    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
-    sync::LazyLock,
-    time::Duration,
-};
-
 use anyhow::{Context, anyhow};
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Buf, Bytes};
+use clap::{Parser, Subcommand};
 use ipnet::Ipv4Net;
 use isakmp::{
-    ikev1::{service::Ikev1Service, session::Ikev1Session},
-    model::{ConfigAttributeType, EspAttributeType, Identity, IdentityRequest},
-    payload::AttributesPayload,
+    ikev1::{
+        model::{ConfigAttributeType, EspAttributeType, IdentityRequest},
+        payload::AttributesPayload,
+        service::Ikev1Service,
+        session::Ikev1Session,
+    },
+    model::Identity,
     session::{IsakmpSession, OfficeMode, SessionType},
     transport::{TcptDataType, UdpTransport},
 };
 use regex::Regex;
+use std::sync::Arc;
+use std::{
+    io::{Write, stdin, stdout},
+    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
+    path::PathBuf,
+    sync::LazyLock,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -24,34 +30,119 @@ use tokio::{
 };
 use tracing_subscriber::EnvFilter;
 
-const CP_AUTH_BLOB: &str = "(\n\
-               :clientType (TRAC)\n\
-               :clientOS (Windows_7)\n\
-               :oldSessionId ()\n\
-               :protocolVersion (100)\n\
-               :client_mode (endpoint_security)\n\
-               :selected_realm_id (vpn_Azure_Authentication))";
+fn cp_auth_blob(realm: &str) -> String {
+    format!(
+        "(\n\
+        \t:clientType (TRAC)\n\
+        \t:clientOS (Windows_7)\n\
+        \t:oldSessionId ()\n\
+        \t:protocolVersion (100)\n\
+        \t:client_mode (endpoint_security)\n\
+        \t:selected_realm_id ({realm})\n\
+        \t:client_logging_data (\n\
+        \t\t:device_id (\"{{02374BAD-DE87-4B94-8190-8E33AEA8D5F0}}\")\n\
+        \t\t:client_name (\"Endpoint Security VPN\")\n\
+        \t\t:client_ver (E88.72)\n\
+        \t\t:client_build_number (986105950)\n\
+        \t\t:device_type (PC)\n\
+        \t\t:os_name (Windows)\n\
+        \t\t:os_version (11)\n\
+        \t\t:os_edition (Professional)\n\
+        \t\t:os_service_pack ()\n\
+        \t\t:os_build (26200)\n\
+        \t\t:os_bits (64bit)\n\
+        \t\t:machine_domain ()\n\
+        \t\t:machine_name (DESKTOP-NICFJFL)\n\
+        \t\t:physical_ip (172.24.1.189)\n\
+        \t\t:mac_address (\"52:54:00:63:2f:09,54:da:3e:16:99:00\")\n\
+        \t)\n\
+        )\n"
+    )
+}
 
-const CP_CA_FINGERPRINT: &str = "THEE DARN FOOL WORE JUDY WOK VASE REND COED DOTE TEST MART";
+#[derive(Debug, Parser)]
+#[command(version, about)]
+struct Cli {
+    address: String,
+    realm: String,
+
+    #[command(subcommand)]
+    identity: Option<IdentityArgs>,
+}
+
+#[derive(Debug, Subcommand)]
+enum IdentityArgs {
+    Pkcs12 {
+        path: PathBuf,
+        password: Option<String>,
+    },
+    Pkcs8 {
+        path: PathBuf,
+    },
+    Pkcs11 {
+        driver_path: PathBuf,
+        pin: Option<String>,
+        #[arg(value_parser = parse_hex)]
+        key_id: Option<Bytes>,
+    },
+}
+
+fn parse_hex(value: &str) -> anyhow::Result<Bytes> {
+    Ok(hex::decode(value)?.into())
+}
+
+impl TryFrom<IdentityArgs> for Identity {
+    type Error = anyhow::Error;
+
+    fn try_from(args: IdentityArgs) -> anyhow::Result<Self> {
+        Ok(match args {
+            IdentityArgs::Pkcs12 { path, password } => Identity::Pkcs12 {
+                data: std::fs::read(path)?,
+                password: password.unwrap_or_default().into(),
+                hybrid_auth: false,
+            },
+            IdentityArgs::Pkcs8 { path } => Identity::Pkcs8 {
+                path,
+                hybrid_auth: false,
+            },
+            IdentityArgs::Pkcs11 {
+                driver_path,
+                pin,
+                key_id,
+            } => Identity::Pkcs11 {
+                driver_path,
+                pin: pin.unwrap_or_default().into(),
+                key_id,
+                hybrid_auth: false,
+            },
+        })
+    }
+}
 
 async fn run_otp_listener(sender: Sender<String>) -> anyhow::Result<()> {
     static OTP_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^GET /(?<otp>[0-9a-f]{60}|[0-9A-F]{60}).*").unwrap());
 
     let tcp = TcpListener::bind("127.0.0.1:7779").await?;
-    let (mut stream, _) = tcp.accept().await?;
+    let mut data = String::new();
 
-    let mut buf = [0u8; 65];
-    stream.read_exact(&mut buf).await?;
+    while data.is_empty() {
+        let (mut stream, _) = tcp.accept().await?;
 
-    let mut data = String::from_utf8_lossy(&buf).into_owned();
+        let mut buf = [0u8; 1];
 
-    while stream.read(&mut buf[0..1]).await.is_ok() && buf[0] != b'\n' && buf[0] != b'\r' {
-        data.push(buf[0].into());
+        while let Ok(size) = stream.read(&mut buf).await
+            && size > 0
+            && buf[0] != b'\n'
+            && buf[0] != b'\r'
+        {
+            data.push(buf[0].into());
+        }
+
+        let _ = stream.shutdown().await;
+        drop(stream);
     }
 
-    let _ = stream.shutdown().await;
-    drop(stream);
     drop(tcp);
 
     if let Some(captures) = OTP_RE.captures(&data)
@@ -164,37 +255,10 @@ async fn handle_auth_reply(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = std::env::args().collect::<Vec<_>>();
+    let cli = Cli::parse();
+    let address = &cli.address;
 
-    let address = args.get(1).context("Missing required server address")?;
-
-    let identity = match args.get(2).map(|s| s.as_str()) {
-        Some("pkcs12") => match args.get(3) {
-            Some(arg) => Identity::Pkcs12 {
-                data: std::fs::read(arg)?,
-                password: args.get(4).map(|s| s.as_str()).unwrap_or_default().into(),
-                hybrid_auth: false,
-            },
-            None => return Err(anyhow!("Missing pkcs12 file path")),
-        },
-        Some("pkcs8") => match args.get(3) {
-            Some(arg) => Identity::Pkcs8 {
-                path: arg.into(),
-                hybrid_auth: false,
-            },
-            None => return Err(anyhow!("Missing pkcs8 pem file path")),
-        },
-        Some("pkcs11") => match args.get(3) {
-            Some(arg) => Identity::Pkcs11 {
-                driver_path: arg.into(),
-                pin: args.get(4).map(|s| s.as_str()).unwrap_or_default().into(),
-                key_id: args.get(5).map(|s| hex::decode(s).unwrap().into()),
-                hybrid_auth: false,
-            },
-            None => return Err(anyhow!("Missing pkcs8 pem file path")),
-        },
-        _ => Identity::None,
-    };
+    let identity = cli.identity.map(Identity::try_from).transpose()?.unwrap_or_default();
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -231,9 +295,9 @@ async fn main() -> anyhow::Result<()> {
     service.do_key_exchange(my_addr, gateway_addr).await?;
 
     let identity_request = IdentityRequest {
-        auth_blob: CP_AUTH_BLOB.to_string(),
+        auth_blob: cp_auth_blob(&cli.realm),
         with_mfa: matches!(identity, Identity::None),
-        internal_ca_fingerprints: vec![CP_CA_FINGERPRINT.to_string()],
+        internal_ca_fingerprints: Vec::new(),
     };
 
     if let (Some(mut auth_attrs), message_id) = service.do_identity_protection(identity_request).await? {
@@ -330,14 +394,14 @@ async fn main() -> anyhow::Result<()> {
 
     drop(service);
 
-    let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-    udp.connect(format!("{address}:500")).await?;
+    let udp = tokio::net::UdpSocket::bind("0.0.0.0:4500").await?;
+    udp.connect(format!("{address}:4500")).await?;
 
     let session = Ikev1Session::new(identity.clone(), SessionType::Initiator)?;
     let office_mode = session.load(&saved)?;
     println!("Loaded office mode: {office_mode:#?}");
 
-    let transport = Box::new(UdpTransport::new(udp, session.new_codec()));
+    let transport = Box::new(UdpTransport::new(Arc::new(udp), session.new_codec()));
     let mut service = Ikev1Service::new(transport, session)?;
 
     let om_reply = service

@@ -7,16 +7,15 @@ use std::{
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use rand::random;
-use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::{
-    certs::{ClientCertificate, Pkcs8Certificate, Pkcs11Certificate},
+    certs::ClientCertificate,
     crypto::{CipherType, Crypto, DigestType, GroupType},
-    ikev1::codec::Ikev1Codec,
+    ikev1::{codec::Ikev1Codec, message::Ikev1Message, model::*},
     message::IsakmpMessageCodec,
-    model::*,
+    model::{EspCryptMaterial, Identity},
     session::{EndpointData, IsakmpSession, OfficeMode, SessionType},
 };
 
@@ -108,6 +107,8 @@ impl Ikev1Session {
 }
 
 impl IsakmpSession for Ikev1Session {
+    type Message = Ikev1Message;
+
     fn initiator(&self) -> Arc<EndpointData> {
         self.inner().initiator()
     }
@@ -136,7 +137,7 @@ impl IsakmpSession for Ikev1Session {
         self.inner().save(office_mode)
     }
 
-    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync> {
+    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec<Ikev1Message> + Send + Sync> {
         Box::new(Ikev1Codec::new(self.clone()))
     }
 
@@ -184,37 +185,7 @@ struct Ikev1SessionImpl {
 
 impl Ikev1SessionImpl {
     fn new(identity: Identity, session_type: SessionType) -> anyhow::Result<Self> {
-        let (hybrid_auth, client_cert): (bool, Option<Arc<dyn ClientCertificate + Send + Sync>>) = match identity {
-            Identity::Pkcs12 {
-                data,
-                password,
-                hybrid_auth,
-            } => (
-                hybrid_auth,
-                Some(Arc::new(Pkcs8Certificate::from_pkcs12(
-                    &data,
-                    password.expose_secret(),
-                )?)),
-            ),
-            Identity::Pkcs8 { path, hybrid_auth } => {
-                (hybrid_auth, Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?)))
-            }
-            Identity::Pkcs11 {
-                driver_path,
-                pin,
-                key_id,
-                hybrid_auth,
-            } => (
-                hybrid_auth,
-                Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
-            ),
-            #[cfg(windows)]
-            Identity::System { common_name } => (
-                true,
-                Some(Arc::new(crate::certs::windows::SystemCertificate::new(&common_name)?)),
-            ),
-            Identity::None => (false, None),
-        };
+        let (hybrid_auth, client_cert) = crate::certs::load_identity(identity)?;
 
         let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, GroupType::Oakley2)?;
 
@@ -281,8 +252,8 @@ impl Ikev1SessionImpl {
             spi,
             sk_e,
             sk_a,
-            transform_id,
-            auth_algorithm,
+            cipher: CipherType::new_for_esp(transform_id, key_length)?,
+            auth: Some(auth_algorithm.to_authentication()?),
         })
     }
 
@@ -336,7 +307,7 @@ impl Ikev1SessionImpl {
 
                 self.initiator = Arc::new(EndpointData {
                     spi: proposal.initiator_spi,
-                    public_key: self.crypto.public_key(),
+                    public_key: self.crypto.public_key()?,
                     ..(*self.initiator).clone()
                 });
             }
@@ -348,7 +319,7 @@ impl Ikev1SessionImpl {
 
                 self.responder = Arc::new(EndpointData {
                     spi: proposal.responder_spi,
-                    public_key: self.crypto.public_key(),
+                    public_key: self.crypto.public_key()?,
                     ..(*self.responder).clone()
                 });
             }
@@ -665,7 +636,7 @@ mod tests {
         let peer = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, peer_group).unwrap();
 
         session
-            .init_from_ke(peer.public_key(), Bytes::from_static(&[0x42; NONCE_SIZE]))
+            .init_from_ke(peer.public_key().unwrap(), Bytes::from_static(&[0x42; NONCE_SIZE]))
             .unwrap();
 
         session

@@ -12,8 +12,8 @@ use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace, warn};
 
 use crate::{
-    message::{IsakmpMessage, IsakmpMessageCodec},
-    transport::{IsakmpTransport, check_informational},
+    message::IsakmpMessageCodec,
+    transport::{IsakmpTransport, TransportMessage},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -128,15 +128,19 @@ where
     }
 }
 
-pub struct TcptTransport {
+pub struct TcptTransport<M> {
     address: Option<SocketAddr>,
-    codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
+    codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     stream: Option<TcpStream>,
     data_type: TcptDataType,
 }
 
-impl TcptTransport {
-    pub fn new(data_type: TcptDataType, address: SocketAddr, codec: Box<dyn IsakmpMessageCodec + Send + Sync>) -> Self {
+impl<M> TcptTransport<M> {
+    pub fn new(
+        data_type: TcptDataType,
+        address: SocketAddr,
+        codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
+    ) -> Self {
         Self {
             address: Some(address),
             codec,
@@ -148,7 +152,7 @@ impl TcptTransport {
     pub fn with_stream(
         data_type: TcptDataType,
         stream: TcpStream,
-        codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
+        codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     ) -> Self {
         Self {
             address: None,
@@ -196,8 +200,8 @@ async fn do_receive(data_type: TcptDataType, stream: &mut TcpStream, timeout: Du
 }
 
 #[async_trait]
-impl IsakmpTransport for TcptTransport {
-    async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
+impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
+    async fn send(&mut self, message: &M) -> anyhow::Result<()> {
         let data = self.codec.encode(message)?;
 
         trace!("Sending ISAKMP message: {:#?}", message);
@@ -215,7 +219,7 @@ impl IsakmpTransport for TcptTransport {
         }
     }
 
-    async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
+    async fn receive(&mut self, timeout: Duration) -> anyhow::Result<M> {
         let stream = self.stream.as_mut().context("No stream")?;
         loop {
             let data = match do_receive(self.data_type, stream, timeout).await {
@@ -228,7 +232,7 @@ impl IsakmpTransport for TcptTransport {
             };
 
             if let Some(received_message) = self.codec.decode(&data)? {
-                check_informational(&received_message)?;
+                received_message.check_informational()?;
 
                 trace!("Received ISAKMP message: {:#?}", received_message);
                 return Ok(received_message);

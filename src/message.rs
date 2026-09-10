@@ -1,31 +1,19 @@
 use bytes::Bytes;
 
-use crate::{
-    model::{ExchangeType, IsakmpFlags},
-    payload::Payload,
-};
-
 pub const IKEV1_VERSION: u8 = 0x10;
+pub const IKEV2_VERSION: u8 = 0x20;
 
-pub trait IsakmpMessageCodec {
-    fn encode(&mut self, message: &IsakmpMessage) -> anyhow::Result<Bytes>;
+/// Fixed ISAKMP header size: RFC 2408 §3.1 for IKEv1, RFC 7296 §3.1 for IKEv2.
+/// The two versions interpret the fields after the SPIs differently but agree
+/// on the length.
+pub const ISAKMP_HEADER_LEN: usize = 28;
 
-    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>>;
-}
+/// Framing for one IKE version. `M` is that version's message type: the two
+/// versions share nothing but the 28-byte header size, so the transport is
+/// generic over the message and the codec supplies the version-specific
+/// encode/decode.
+pub trait IsakmpMessageCodec<M> {
+    fn encode(&mut self, message: &M) -> anyhow::Result<Bytes>;
 
-#[derive(Debug, Clone)]
-pub struct IsakmpMessage {
-    pub initiator_spi: u64,
-    pub responder_spi: u64,
-    pub version: u8,
-    pub exchange_type: ExchangeType,
-    pub flags: IsakmpFlags,
-    pub message_id: u32,
-    pub payloads: Vec<Payload>,
-}
-
-impl IsakmpMessage {
-    pub fn next_payload(&self, index: usize) -> u8 {
-        self.payloads.get(index).map_or(0, |p| p.as_payload_type().into())
-    }
+    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<M>>;
 }

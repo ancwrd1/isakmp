@@ -5,10 +5,13 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::trace;
 
 use crate::{
-    ikev1::session::Ikev1Session,
-    message::{IsakmpMessage, IsakmpMessageCodec},
-    model::{ExchangeType, IsakmpFlags, PayloadType},
-    payload::Payload,
+    ikev1::{
+        message::Ikev1Message,
+        model::{ExchangeType, IsakmpFlags, PayloadType},
+        payload::Payload,
+        session::Ikev1Session,
+    },
+    message::{IKEV1_VERSION, ISAKMP_HEADER_LEN, IsakmpMessageCodec},
 };
 
 pub struct Ikev1Codec {
@@ -21,16 +24,9 @@ impl Ikev1Codec {
     }
 }
 
-impl IsakmpMessageCodec for Ikev1Codec {
-    fn encode(&mut self, message: &IsakmpMessage) -> anyhow::Result<Bytes> {
-        let mut payload_buf = BytesMut::new();
-        for (i, payload) in message.payloads.iter().enumerate() {
-            payload_buf.put_u8(message.next_payload(i + 1));
-            payload_buf.put_u8(0);
-            let data = payload.to_bytes();
-            payload_buf.put_u16(4 + data.len() as u16);
-            payload_buf.put_slice(&data);
-        }
+impl IsakmpMessageCodec<Ikev1Message> for Ikev1Codec {
+    fn encode(&mut self, message: &Ikev1Message) -> anyhow::Result<Bytes> {
+        let mut payload_buf = BytesMut::from(Payload::write_all(&message.payloads));
 
         let payload = if message.flags.contains(IsakmpFlags::ENCRYPTION) {
             let block_size = self.session.cipher_block_size();
@@ -48,18 +44,18 @@ impl IsakmpMessageCodec for Ikev1Codec {
         buf.put_u64(message.initiator_spi);
         buf.put_u64(message.responder_spi);
 
-        buf.put_u8(message.next_payload(0));
-        buf.put_u8(0x10);
+        buf.put_u8(message.next_payload(0).into());
+        buf.put_u8(IKEV1_VERSION);
         buf.put_u8(message.exchange_type.into());
         buf.put_u8(message.flags.bits());
         buf.put_u32(message.message_id);
-        buf.put_u32(28 + payload.len() as u32);
+        buf.put_u32((ISAKMP_HEADER_LEN + payload.len()) as u32);
         buf.put_slice(&payload);
 
         Ok(buf.freeze())
     }
 
-    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<IsakmpMessage>> {
+    fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<Ikev1Message>> {
         if !self.session.validate_message(data)? {
             trace!("Discarding duplicate message");
             return Ok(None);
@@ -77,7 +73,7 @@ impl IsakmpMessageCodec for Ikev1Codec {
         let message_id = reader.read_u32::<BigEndian>()?;
         let length = reader.read_u32::<BigEndian>()?;
 
-        let mut data = vec![0u8; length as usize - 28];
+        let mut data = vec![0u8; length as usize - ISAKMP_HEADER_LEN];
         reader.read_exact(&mut data)?;
 
         if flags.contains(IsakmpFlags::ENCRYPTION) {
@@ -88,7 +84,7 @@ impl IsakmpMessageCodec for Ikev1Codec {
 
         let payloads = Payload::parse_all(next_payload, &mut cursor)?;
 
-        Ok(Some(IsakmpMessage {
+        Ok(Some(Ikev1Message {
             initiator_spi: spi_i,
             responder_spi: spi_r,
             version,

@@ -35,6 +35,9 @@ pub struct OfficeMode {
 /// schedule, message framing or exchange structure belongs on the concrete
 /// session type instead (see `Ikev1Session`).
 pub trait IsakmpSession {
+    /// The wire message type of this session's IKE version.
+    type Message;
+
     fn initiator(&self) -> Arc<EndpointData>;
 
     fn responder(&self) -> Arc<EndpointData>;
@@ -57,7 +60,7 @@ pub trait IsakmpSession {
 
     fn save(&self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>>;
 
-    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec + Send + Sync>;
+    fn new_codec(&self) -> Box<dyn IsakmpMessageCodec<Self::Message> + Send + Sync>;
 
     fn timestamp(&self) -> u64;
 

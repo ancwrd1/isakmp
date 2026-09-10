@@ -11,9 +11,10 @@ use tracing::{debug, trace};
 use crate::{
     certs::CertList,
     ikev1::session::Ikev1Session,
-    message::{IKEV1_VERSION, IsakmpMessage},
-    model::*,
-    payload::*,
+    ikev1::{message::Ikev1Message, model::*, payload::*},
+    message::IKEV1_VERSION,
+    model::DataAttribute,
+    payload::{BasicPayload, PayloadLike},
     rfc1751::key_to_english,
     session::IsakmpSession,
     transport::IsakmpTransport,
@@ -21,7 +22,7 @@ use crate::{
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesPayload> {
+fn get_attributes_payload(response: Ikev1Message) -> anyhow::Result<AttributesPayload> {
     response
         .payloads
         .into_iter()
@@ -34,12 +35,15 @@ fn get_attributes_payload(response: IsakmpMessage) -> anyhow::Result<AttributesP
 
 pub struct Ikev1Service {
     socket_timeout: Duration,
-    transport: Box<dyn IsakmpTransport + Send + Sync>,
+    transport: Box<dyn IsakmpTransport<Ikev1Message> + Send + Sync>,
     session: Ikev1Session,
 }
 
 impl Ikev1Service {
-    pub fn new(transport: Box<dyn IsakmpTransport + Send + Sync>, session: Ikev1Session) -> anyhow::Result<Self> {
+    pub fn new(
+        transport: Box<dyn IsakmpTransport<Ikev1Message> + Send + Sync>,
+        session: Ikev1Session,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             socket_timeout: DEFAULT_TIMEOUT,
             transport,
@@ -51,7 +55,7 @@ impl Ikev1Service {
         &mut self.session
     }
 
-    fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<IsakmpMessage> {
+    fn build_ike_sa(&self, lifetime: Duration) -> anyhow::Result<Ikev1Message> {
         let mut transforms = Vec::new();
 
         for (alg, key_lengths) in [
@@ -131,7 +135,7 @@ impl Ikev1Service {
             //Payload::VendorId(VID_FRAGMENTATION.into()),
         ];
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: 0,
             version: IKEV1_VERSION,
@@ -148,7 +152,7 @@ impl Ikev1Service {
         nonce: &[u8],
         ipaddr: Ipv4Addr,
         lifetime: Duration,
-    ) -> anyhow::Result<IsakmpMessage> {
+    ) -> anyhow::Result<Ikev1Message> {
         let mut transforms = Vec::new();
 
         for (transform_id, key_lengths) in [
@@ -227,7 +231,7 @@ impl Ikev1Service {
             &[&sa_payload, &nonce_payload, &ip_payload, &netmask_payload],
         )?;
 
-        let message = IsakmpMessage {
+        let message = Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -240,7 +244,7 @@ impl Ikev1Service {
         Ok(message)
     }
 
-    fn build_delete_sa(&mut self) -> anyhow::Result<IsakmpMessage> {
+    fn build_delete_sa(&mut self) -> anyhow::Result<Ikev1Message> {
         let message_id = random();
 
         let delete_payload = Payload::Delete(DeletePayload {
@@ -255,7 +259,7 @@ impl Ikev1Service {
 
         let hash_payload = self.make_hash_from_payloads(message_id, &[&delete_payload])?;
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -266,7 +270,7 @@ impl Ikev1Service {
         })
     }
 
-    fn build_ke(&self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<IsakmpMessage> {
+    fn build_ke(&self, local_ip: Ipv4Addr, gateway_ip: Ipv4Addr) -> anyhow::Result<Ikev1Message> {
         let ke = Payload::KeyExchange(self.session.initiator().public_key.as_ref().into());
         let nonce = Payload::Nonce(self.session.initiator().nonce.as_ref().into());
 
@@ -309,7 +313,7 @@ impl Ikev1Service {
             }));
         }
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -320,7 +324,7 @@ impl Ikev1Service {
         })
     }
 
-    fn build_id_protection(&self, identity_request: &IdentityRequest) -> anyhow::Result<IsakmpMessage> {
+    fn build_id_protection(&self, identity_request: &IdentityRequest) -> anyhow::Result<Ikev1Message> {
         let id_payload = if !self.session.hybrid_auth()
             && let Some(client_cert) = self.session.client_certificate()
         {
@@ -391,7 +395,7 @@ impl Ikev1Service {
             vec![hash_payload, id_payload, notify_payload]
         };
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -408,7 +412,7 @@ impl Ikev1Service {
         message_id: u32,
         attribute_type: ConfigAttributeType,
         data: Bytes,
-    ) -> anyhow::Result<IsakmpMessage> {
+    ) -> anyhow::Result<Ikev1Message> {
         let attrs_payload = Payload::Attributes(AttributesPayload {
             attributes_payload_type: AttributesPayloadType::Reply,
             identifier,
@@ -420,7 +424,7 @@ impl Ikev1Service {
 
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -431,7 +435,7 @@ impl Ikev1Service {
         })
     }
 
-    fn build_ack_cfg(&self, identifier: u16, message_id: u32) -> anyhow::Result<IsakmpMessage> {
+    fn build_ack_cfg(&self, identifier: u16, message_id: u32) -> anyhow::Result<Ikev1Message> {
         let attrs_payload = Payload::Attributes(AttributesPayload {
             attributes_payload_type: AttributesPayloadType::Ack,
             identifier,
@@ -440,7 +444,7 @@ impl Ikev1Service {
 
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -451,7 +455,7 @@ impl Ikev1Service {
         })
     }
 
-    fn build_om_cfg(&self, address: Option<Ipv4Net>, mac: Option<Bytes>) -> anyhow::Result<IsakmpMessage> {
+    fn build_om_cfg(&self, address: Option<Ipv4Net>, mac: Option<Bytes>) -> anyhow::Result<Ikev1Message> {
         let empty_attrs = [
             ConfigAttributeType::Ipv4Dns,
             ConfigAttributeType::AddressExpiry,
@@ -495,7 +499,7 @@ impl Ikev1Service {
 
         let hash_payload = self.make_hash_from_payloads(message_id, &[&attrs_payload])?;
 
-        Ok(IsakmpMessage {
+        Ok(Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -539,7 +543,7 @@ impl Ikev1Service {
         Ok(proposal)
     }
 
-    pub async fn send_sa_proposal(&mut self, message: IsakmpMessage) -> anyhow::Result<(SaProposal, IsakmpMessage)> {
+    pub async fn send_sa_proposal(&mut self, message: Ikev1Message) -> anyhow::Result<(SaProposal, Ikev1Message)> {
         let sa_bytes = message.payloads[0].to_bytes();
 
         let response = self.transport.send_receive(&message, self.socket_timeout).await?;
@@ -795,7 +799,7 @@ impl Ikev1Service {
 
     pub async fn send_attribute_message(
         &mut self,
-        message: IsakmpMessage,
+        message: Ikev1Message,
         timeout: Option<Duration>,
     ) -> anyhow::Result<(AttributesPayload, u32)> {
         let response = self
@@ -817,7 +821,7 @@ impl Ikev1Service {
         self.send_ack_message(self.build_ack_cfg(identifier, message_id)?).await
     }
 
-    pub async fn send_ack_message(&mut self, msg: IsakmpMessage) -> anyhow::Result<()> {
+    pub async fn send_ack_message(&mut self, msg: Ikev1Message) -> anyhow::Result<()> {
         self.transport.send(&msg).await
     }
 
@@ -926,7 +930,7 @@ impl Ikev1Service {
 
         debug!("Negotiated ESP key length: {}", key_len);
 
-        let hash_msg = IsakmpMessage {
+        let hash_msg = Ikev1Message {
             initiator_spi: self.session.initiator_spi(),
             responder_spi: self.session.responder_spi(),
             version: IKEV1_VERSION,
@@ -958,14 +962,14 @@ impl Ikev1Service {
         trace!("IN  ENC : {}", hex::encode(&esp_in.sk_e));
         trace!("IN  AUTH: {}", hex::encode(&esp_in.sk_a));
         trace!("IN  KEYL: {}", esp_in.sk_e.len());
-        trace!("IN  EALG: {:?}", esp_in.transform_id);
-        trace!("IN  AALG: {:?}", esp_in.auth_algorithm);
+        trace!("IN  EALG: {:?}", esp_in.cipher);
+        trace!("IN  AALG: {:?}", esp_in.auth);
         trace!("OUT SPI : {:08x}", esp_out.spi);
         trace!("OUT ENC : {}", hex::encode(&esp_out.sk_e));
         trace!("OUT AUTH: {}", hex::encode(&esp_out.sk_a));
         trace!("OUT KEYL: {}", esp_out.sk_e.len());
-        trace!("OUT EALG: {:?}", esp_out.transform_id);
-        trace!("OUT AALG: {:?}", esp_out.auth_algorithm);
+        trace!("OUT EALG: {:?}", esp_out.cipher);
+        trace!("OUT AALG: {:?}", esp_out.auth);
 
         debug!("End ESP SA proposal");
 

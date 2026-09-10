@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
@@ -20,8 +23,42 @@ use openssl::{
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, trace};
 
+use crate::model::Identity;
+
 fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
     Ok(X509::from_der(data).or_else(|_| X509::from_pem(data))?)
+}
+
+/// Loads the client certificate an [`Identity`] names, alongside whether it
+/// asks for hybrid authentication. Shared by both IKE versions' sessions,
+/// which differ in what they do with the certificate, not in how they load it.
+pub fn load_identity(identity: Identity) -> anyhow::Result<(bool, Option<Arc<dyn ClientCertificate + Send + Sync>>)> {
+    Ok(match identity {
+        Identity::Pkcs12 {
+            data,
+            password,
+            hybrid_auth,
+        } => (
+            hybrid_auth,
+            Some(Arc::new(Pkcs8Certificate::from_pkcs12(
+                &data,
+                password.expose_secret(),
+            )?)),
+        ),
+        Identity::Pkcs8 { path, hybrid_auth } => (hybrid_auth, Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?))),
+        Identity::Pkcs11 {
+            driver_path,
+            pin,
+            key_id,
+            hybrid_auth,
+        } => (
+            hybrid_auth,
+            Some(Arc::new(Pkcs11Certificate::new(driver_path, pin, key_id)?)),
+        ),
+        #[cfg(windows)]
+        Identity::System { common_name } => (true, Some(Arc::new(windows::SystemCertificate::new(&common_name)?))),
+        Identity::None => (false, None),
+    })
 }
 
 pub trait ClientCertificate {

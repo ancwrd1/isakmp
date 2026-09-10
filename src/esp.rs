@@ -11,7 +11,6 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use openssl::{
-    hash::MessageDigest,
     pkey::PKey,
     sign::Signer,
     symm::{Cipher, Crypter, Mode},
@@ -24,13 +23,9 @@ use pnet_packet::{
     ipv4::{Ipv4Packet, MutableIpv4Packet, checksum},
     udp::{MutableUdpPacket, UdpPacket},
 };
-use rand::random;
 use tokio::time::Instant;
 
-use crate::{
-    crypto::CipherType,
-    model::{EspAuthAlgorithm, EspCryptMaterial, TransformId},
-};
+use crate::model::EspCryptMaterial;
 
 #[derive(Packet)]
 #[allow(unused)]
@@ -39,6 +34,85 @@ pub struct Esp {
     seq: u32be,
     #[payload]
     payload: Vec<u8>,
+}
+
+/// Cipher for a CBC + HMAC SA, which carries its integrity key separately.
+fn cbc_cipher(params: &EspCryptMaterial) -> anyhow::Result<Cipher> {
+    if params.cipher.is_aead() {
+        anyhow::bail!("{:?} is an AEAD cipher, not a CBC one", params.cipher);
+    }
+    check_key_len(params)?;
+
+    Ok(params.cipher.into())
+}
+
+/// Cipher, key and salt for an AEAD SA. RFC 4106 §3 draws four octets of keying
+/// material beyond the key proper: the salt, which never appears on the wire
+/// and prefixes the explicit IV to form the nonce.
+fn aead_cipher(params: &EspCryptMaterial) -> anyhow::Result<(Cipher, &[u8], &[u8])> {
+    if !params.cipher.is_aead() {
+        anyhow::bail!("{:?} is not an AEAD cipher", params.cipher);
+    }
+    check_key_len(params)?;
+
+    let (key, salt) = params.sk_e.split_at(params.cipher.key_len());
+
+    Ok((params.cipher.into(), key, salt))
+}
+
+fn check_key_len(params: &EspCryptMaterial) -> anyhow::Result<()> {
+    let expected = params.cipher.key_material_len();
+    if params.sk_e.len() != expected {
+        anyhow::bail!(
+            "ESP key is {} bytes, {:?} expects {}",
+            params.sk_e.len(),
+            params.cipher,
+            expected
+        );
+    }
+
+    Ok(())
+}
+
+/// ESP authenticates the SPI and sequence number along with the ciphertext: as
+/// AAD for an AEAD cipher (RFC 4106 §5), and as the leading HMAC input for
+/// CBC + HMAC (RFC 4303 §3.3.2).
+fn aad(spi: u32, seq: u32) -> [u8; 8] {
+    let mut aad = [0u8; 8];
+    aad[0..4].copy_from_slice(&spi.to_be_bytes());
+    aad[4..8].copy_from_slice(&seq.to_be_bytes());
+    aad
+}
+
+/// ESP trailer, RFC 4303 §2.4: padding up to the cipher's alignment, the pad
+/// length and the next header.
+fn add_trailer(data: &[u8], block_size: usize) -> Vec<u8> {
+    let pad_len = (block_size - ((data.len() + 2) % block_size)) % block_size;
+
+    let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
+    plain.extend(data);
+    plain.extend(1..=pad_len as u8);
+    plain.push(pad_len as u8);
+    plain.push(4); // next header: IPIP
+
+    plain
+}
+
+fn strip_trailer(mut data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    if data.len() < 2 {
+        anyhow::bail!("ESP plaintext too short");
+    }
+    let next_header = data[data.len() - 1];
+    if next_header != 4 {
+        anyhow::bail!("Invalid next header, should be IPIP");
+    }
+    let pad_len = data[data.len() - 2] as usize;
+    if data.len() < pad_len + 2 {
+        anyhow::bail!("Invalid ESP pad length");
+    }
+    data.truncate(data.len() - pad_len - 2);
+
+    Ok(data)
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -139,26 +213,54 @@ impl EspCodec {
 
         let (_, params) = self.params.get(&spi).context("Invalid SPI")?;
 
-        let payload = esp.payload();
-        let hash_len = params.auth_algorithm.hash_len();
-        if payload.len() < hash_len {
+        Ok(self.open(params, spi, seq, esp.payload())?.into())
+    }
+
+    /// Authenticate and decrypt one ESP payload, which is `IV || ciphertext ||
+    /// ICV` either way. The AEAD tag covers both the ciphertext and the header
+    /// it is fed as AAD, while CBC + HMAC has the ICV computed separately over
+    /// everything that precedes it.
+    fn open(&self, params: &EspCryptMaterial, spi: u32, seq: u32, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let aad = aad(spi, seq);
+
+        if params.cipher.is_aead() {
+            return self.decrypt_aead(params, payload, &aad);
+        }
+
+        let icv_len = params.icv_len();
+        if payload.len() < icv_len {
             anyhow::bail!("ESP payload shorter than ICV");
         }
-        let (data, auth) = payload.split_at(payload.len() - hash_len);
+        let (data, auth) = payload.split_at(payload.len() - icv_len);
 
-        self.verify(params, &[&spi.to_be_bytes(), &seq.to_be_bytes(), data], auth)?;
+        self.verify(params, &[&aad, data], auth)?;
 
-        let decrypted = self.decrypt(params, data)?;
-        Ok(decrypted.into())
+        self.decrypt(params, data)
+    }
+
+    /// Encrypt one payload and bind it to the next sequence number, which the
+    /// ICV covers and, for AEAD, the nonce is derived from. Returns that
+    /// sequence number together with the ESP payload.
+    fn seal(&self, params: &EspCryptMaterial, spi: u32, data: &[u8]) -> anyhow::Result<(u32, Vec<u8>)> {
+        let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
+        let aad = aad(spi, seq);
+
+        let payload = if params.cipher.is_aead() {
+            self.encrypt_aead(params, seq, data, &aad)?
+        } else {
+            let mut payload = self.encrypt(params, data)?;
+            let auth = self.authenticate(params, &[&aad, &payload])?;
+            payload.extend(auth);
+            payload
+        };
+
+        Ok((seq, payload))
     }
 
     fn encode_to_ip_udp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let (spi, params) = self.current_outbound()?;
 
-        let mut data = self.encrypt(params, data)?;
-        let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-        let auth = self.authenticate(params, &[&spi.to_be_bytes(), &next_seq.to_be_bytes(), &data])?;
-        data.extend(auth);
+        let (next_seq, data) = self.seal(params, spi, data)?;
 
         let mut buffer = vec![
             0u8;
@@ -198,10 +300,7 @@ impl EspCodec {
     fn encode_to_esp(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let (spi, params) = self.current_outbound()?;
 
-        let mut data = self.encrypt(params, data)?;
-        let next_seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
-        let auth = self.authenticate(params, &[&spi.to_be_bytes(), &next_seq.to_be_bytes(), &data])?;
-        data.extend(auth);
+        let (next_seq, data) = self.seal(params, spi, data)?;
 
         let mut buffer = vec![0u8; data.len() + EspPacket::minimum_packet_size()];
 
@@ -214,22 +313,13 @@ impl EspCodec {
     }
 
     fn encrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let iv: &[u8] = match params.transform_id {
-            TransformId::Esp3Des => &random::<[u8; 8]>(),
-            TransformId::EspAesCbc => &random::<[u8; 16]>(),
-            _ => anyhow::bail!("Unsupported encryption algorithm"),
-        };
+        let cipher = cbc_cipher(params)?;
 
-        let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
+        let mut iv = vec![0u8; cipher.iv_len().unwrap_or_default()];
+        rand::fill(&mut iv[..]);
+        let iv = &iv[..];
 
-        let block_size = cipher.block_size();
-        let pad_len = (block_size - ((data.len() + 2) % block_size)) % block_size;
-
-        let mut plain = Vec::with_capacity(data.len() + pad_len + 2);
-        plain.extend(data);
-        plain.extend(1..=pad_len as u8);
-        plain.push(pad_len as u8);
-        plain.push(4); // next header: IPIP
+        let plain = add_trailer(data, params.cipher.block_size());
 
         let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
 
@@ -245,22 +335,81 @@ impl EspCodec {
         Ok(out)
     }
 
-    fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
-        let key = PKey::hmac(&params.sk_a)?;
-        let digest = match params.auth_algorithm {
-            EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => MessageDigest::sha256(),
-            EspAuthAlgorithm::HmacSha160 | EspAuthAlgorithm::HmacSha96 => MessageDigest::sha1(),
-            _ => anyhow::bail!("Unsupported authentication algorithm: {:?}", params.auth_algorithm),
-        };
+    /// RFC 4106: `IV || ciphertext || ICV`, where the nonce is the implicit
+    /// salt followed by the explicit IV. The IV only has to be unique per key
+    /// (§3.1), so the sequence number the packet already carries serves as the
+    /// counter — the keys are freshly derived for every SA, and the counter is
+    /// reset alongside them.
+    fn encrypt_aead(&self, params: &EspCryptMaterial, seq: u32, data: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let (cipher, key, salt) = aead_cipher(params)?;
 
-        let mut signer = Signer::new(digest, &key)?;
+        let iv = (seq as u64).to_be_bytes();
+        let nonce = [salt, &iv[..]].concat();
+
+        let plain = add_trailer(data, params.cipher.block_size());
+
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(&nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
+        out[0..iv.len()].copy_from_slice(&iv);
+
+        let mut count = crypter.update(&plain, &mut out[iv.len()..])?;
+        count += crypter.finalize(&mut out[iv.len() + count..])?;
+
+        out.truncate(count + iv.len());
+
+        let mut icv = vec![0u8; params.cipher.icv_len()];
+        crypter.get_tag(&mut icv)?;
+        out.extend(icv);
+
+        Ok(out)
+    }
+
+    fn decrypt_aead(&self, params: &EspCryptMaterial, data: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let (cipher, key, salt) = aead_cipher(params)?;
+
+        let iv_len = params.cipher.iv_len();
+        let icv_len = params.cipher.icv_len();
+
+        if data.len() < iv_len + icv_len {
+            anyhow::bail!("ESP payload shorter than IV and ICV");
+        }
+
+        let (data, icv) = data.split_at(data.len() - icv_len);
+        let (iv, ciphertext) = data.split_at(iv_len);
+        let nonce = [salt, iv].concat();
+
+        let mut crypter = Crypter::new(cipher, Mode::Decrypt, key, Some(&nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0u8; ciphertext.len() + cipher.block_size()];
+        let mut count = crypter.update(ciphertext, &mut out)?;
+
+        crypter.set_tag(icv)?;
+        count += crypter
+            .finalize(&mut out[count..])
+            .context("Invalid packet signature")?;
+
+        out.truncate(count);
+
+        strip_trailer(out)
+    }
+
+    fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
+        let auth = params.auth.context("ESP SA has no integrity algorithm")?;
+
+        let key = PKey::hmac(&params.sk_a)?;
+        let mut signer = Signer::new(auth.digest.into(), &key)?;
 
         for part in parts {
             signer.update(part)?;
         }
 
         let mut hmac = signer.sign_to_vec()?;
-        hmac.truncate(params.auth_algorithm.hash_len());
+        hmac.truncate(auth.icv_len);
 
         Ok(hmac)
     }
@@ -276,13 +425,8 @@ impl EspCodec {
     }
 
     fn decrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let iv_len = match params.transform_id {
-            TransformId::Esp3Des => 8,
-            TransformId::EspAesCbc => 16,
-            _ => anyhow::bail!("Unsupported encryption algorithm"),
-        };
-
-        let cipher: Cipher = CipherType::new_for_esp(params.transform_id, params.sk_e.len())?.into();
+        let cipher = cbc_cipher(params)?;
+        let iv_len = cipher.iv_len().unwrap_or_default();
 
         if data.len() < iv_len + cipher.block_size() {
             anyhow::bail!("ESP ciphertext too short");
@@ -298,19 +442,8 @@ impl EspCodec {
         count += crypter.finalize(&mut out[count..])?;
 
         out.truncate(count);
-        if out.len() < 2 {
-            anyhow::bail!("ESP plaintext too short");
-        }
-        let next_header = out[out.len() - 1];
-        if next_header != 4 {
-            anyhow::bail!("Invalid next header, should be IPIP");
-        }
-        let pad_len = out[out.len() - 2] as usize;
-        if out.len() < pad_len + 2 {
-            anyhow::bail!("Invalid ESP pad length");
-        }
-        out.truncate(out.len() - pad_len - 2);
-        Ok(out)
+
+        strip_trailer(out)
     }
 }
 
@@ -324,24 +457,23 @@ mod tests {
     use pnet_packet::{ipv4::Ipv4Packet, udp::UdpPacket};
 
     use super::*;
-    use crate::model::{EspAuthAlgorithm, EspCryptMaterial, TransformId};
+    use crate::{
+        crypto::{CipherType, DigestType, IcvLength},
+        model::{EspAuthentication, EspCryptMaterial},
+    };
 
     const SPI_EXPIRATION_TIME: Duration = Duration::from_secs(3600);
 
-    fn do_test_esp_codec(
-        encap_type: EspEncapType,
-        sk_e: &[u8],
-        sk_a: &[u8],
-        transform_id: TransformId,
-        auth_algorithm: EspAuthAlgorithm,
-    ) {
-        let params = Arc::new(EspCryptMaterial {
-            spi: 0x01020304,
-            sk_e: Bytes::copy_from_slice(sk_e),
-            sk_a: Bytes::copy_from_slice(sk_a),
-            transform_id,
-            auth_algorithm,
-        });
+    /// Keying material for `cipher`: `key || salt`, the salt being empty for
+    /// everything but AEAD.
+    fn random_key(cipher: CipherType) -> Bytes {
+        let mut sk_e = vec![0; cipher.key_material_len()];
+        rand::fill(&mut sk_e[..]);
+        sk_e.into()
+    }
+
+    fn do_test_esp_codec(encap_type: EspEncapType, params: EspCryptMaterial) {
+        let params = Arc::new(params);
 
         let src = Ipv4Addr::new(192, 168, 0, 1);
         let dst = Ipv4Addr::new(192, 168, 0, 2);
@@ -364,28 +496,197 @@ mod tests {
 
     #[test]
     fn test_esp_codec_combinations() {
-        for (transform_id, key_lengths) in [
-            (TransformId::Esp3Des, vec![24]),
-            (TransformId::EspAesCbc, vec![16, 24, 32]),
-        ] {
-            let encaps = iproduct!(
-                [EspEncapType::Udp, EspEncapType::None],
-                key_lengths,
-                [
-                    (EspAuthAlgorithm::HmacSha96, 20),
-                    (EspAuthAlgorithm::HmacSha160, 20),
-                    (EspAuthAlgorithm::HmacSha256, 32),
-                ]
-            );
+        let ciphers = [
+            CipherType::DesEde3Cbc,
+            CipherType::Aes128Cbc,
+            CipherType::Aes192Cbc,
+            CipherType::Aes256Cbc,
+        ];
 
-            for (encap, sk_e_len, (alg, sk_a_len)) in encaps {
-                let mut sk_e = vec![0; sk_e_len];
-                rand::fill(&mut sk_e[..]);
-                let mut sk_a = vec![0; sk_a_len];
-                rand::fill(&mut sk_a[..]);
-                do_test_esp_codec(encap, &sk_e, &sk_a, transform_id, alg);
-            }
+        // HMAC-SHA1-96, HMAC-SHA1-160 and HMAC-SHA2-256-128: the same digest
+        // can carry different truncations, which is why the ICV length is
+        // stored rather than derived
+        let auths = [
+            (
+                EspAuthentication {
+                    digest: DigestType::Sha1,
+                    icv_len: 12,
+                },
+                20,
+            ),
+            (
+                EspAuthentication {
+                    digest: DigestType::Sha1,
+                    icv_len: 20,
+                },
+                20,
+            ),
+            (
+                EspAuthentication {
+                    digest: DigestType::Sha256,
+                    icv_len: 16,
+                },
+                32,
+            ),
+        ];
+
+        for (encap, cipher, (auth, sk_a_len)) in iproduct!([EspEncapType::Udp, EspEncapType::None], ciphers, auths) {
+            let mut sk_a = vec![0; sk_a_len];
+            rand::fill(&mut sk_a[..]);
+
+            do_test_esp_codec(
+                encap,
+                EspCryptMaterial {
+                    spi: 0x01020304,
+                    sk_e: random_key(cipher),
+                    sk_a: sk_a.into(),
+                    cipher,
+                    auth: Some(auth),
+                },
+            );
         }
+    }
+
+    /// AES-GCM carries no integrity algorithm of its own: the ICV is the AEAD
+    /// tag, whose length is one of the three ENCR_AES_GCM_* transforms.
+    #[test]
+    fn test_esp_gcm_codec_combinations() {
+        let ciphers = iproduct!(
+            [IcvLength::Eight, IcvLength::Twelve, IcvLength::Sixteen],
+            [
+                CipherType::Aes128Gcm as fn(IcvLength) -> CipherType,
+                CipherType::Aes192Gcm,
+                CipherType::Aes256Gcm,
+            ]
+        )
+        .map(|(icv, cipher)| cipher(icv));
+
+        for (encap, cipher) in iproduct!([EspEncapType::Udp, EspEncapType::None], ciphers) {
+            do_test_esp_codec(
+                encap,
+                EspCryptMaterial {
+                    spi: 0x01020304,
+                    sk_e: random_key(cipher),
+                    sk_a: Bytes::new(),
+                    cipher,
+                    auth: None,
+                },
+            );
+        }
+    }
+
+    fn gcm_params(icv_len: IcvLength) -> EspCryptMaterial {
+        let cipher = CipherType::Aes256Gcm(icv_len);
+        EspCryptMaterial {
+            spi: 0x01020304,
+            sk_e: random_key(cipher),
+            sk_a: Bytes::new(),
+            cipher,
+            auth: None,
+        }
+    }
+
+    fn gcm_codec(icv_len: IcvLength) -> EspCodec {
+        let mut codec = EspCodec::new(Ipv4Addr::LOCALHOST, Ipv4Addr::LOCALHOST, EspEncapType::None);
+        codec.set_params(0x01020304, Arc::new(gcm_params(icv_len)));
+        codec
+    }
+
+    /// The ICV of an AEAD SA is the tag, and its length comes from the cipher
+    /// rather than from an integrity algorithm.
+    #[test]
+    fn test_gcm_packet_layout() {
+        let codec = gcm_codec(IcvLength::Twelve);
+        let params = gcm_params(IcvLength::Twelve);
+
+        assert_eq!(params.icv_len(), 12);
+        assert_eq!(params.cipher.salt_len(), 4);
+        assert_eq!(params.sk_e.len(), 36);
+
+        let data = b"quick brown fox";
+        let encoded = codec.encode_to_esp(data).unwrap();
+        let esp = EspPacket::new(&encoded).unwrap();
+
+        // 8-octet explicit IV, then 15 octets of payload and the 2-octet
+        // trailer padded up to GCM's 4-octet alignment, then the 12-octet tag
+        assert_eq!(esp.payload().len(), 8 + 20 + 12);
+    }
+
+    /// RFC 4106 §3.1 only requires the IV to be unique per key; it is taken
+    /// from the sequence number, so no two packets of an SA share a nonce.
+    #[test]
+    fn test_gcm_iv_follows_the_sequence_number() {
+        let codec = gcm_codec(IcvLength::Sixteen);
+
+        for _ in 0..4 {
+            let encoded = codec.encode_to_esp(b"payload").unwrap();
+            let esp = EspPacket::new(&encoded).unwrap();
+
+            assert_eq!(esp.payload()[..8], (esp.get_seq() as u64).to_be_bytes());
+            assert_eq!(codec.decode_from_esp(&encoded).unwrap().as_ref(), b"payload");
+        }
+    }
+
+    /// The tag covers the SPI and sequence number as AAD, not just the
+    /// ciphertext.
+    #[test]
+    fn test_gcm_rejects_tampering() {
+        let codec = gcm_codec(IcvLength::Sixteen);
+
+        let encoded = codec.encode_to_esp(b"payload").unwrap();
+
+        // last octet of the sequence number, the ciphertext, and the tag
+        for offset in [7, EspPacket::minimum_packet_size() + 10, encoded.len() - 1] {
+            let mut tampered = encoded.to_vec();
+            tampered[offset] ^= 1;
+            assert!(codec.decode_from_esp(&tampered).is_err());
+        }
+
+        // and a payload that cannot even hold an IV and a tag
+        let truncated = &encoded[..EspPacket::minimum_packet_size() + 8];
+        assert!(codec.decode_from_esp(truncated).is_err());
+    }
+
+    /// The salt is part of the keying material, so an AEAD key of exactly the
+    /// cipher's key length is one that was derived without it.
+    #[test]
+    fn test_gcm_key_material_length_is_checked() {
+        let params = EspCryptMaterial {
+            sk_e: Bytes::from(vec![0x11; 32]),
+            ..gcm_params(IcvLength::Sixteen)
+        };
+
+        let codec = EspCodec::new(Ipv4Addr::LOCALHOST, Ipv4Addr::LOCALHOST, EspEncapType::None);
+        assert!(codec.encrypt_aead(&params, 1, b"payload", &[]).is_err());
+
+        // and a CBC SA never takes the AEAD path, or the other way round
+        assert!(cbc_cipher(&gcm_params(IcvLength::Sixteen)).is_err());
+        assert!(
+            aead_cipher(&EspCryptMaterial {
+                cipher: CipherType::Aes256Cbc,
+                ..gcm_params(IcvLength::Sixteen)
+            })
+            .is_err()
+        );
+    }
+
+    /// A key that does not match the negotiated cipher is caught before openssl
+    /// sees it.
+    #[test]
+    fn test_key_length_mismatch_is_rejected() {
+        let params = EspCryptMaterial {
+            spi: 1,
+            sk_e: Bytes::from(vec![0x11; 16]),
+            sk_a: Bytes::from(vec![0x22; 32]),
+            cipher: CipherType::Aes256Cbc,
+            auth: Some(EspAuthentication {
+                digest: DigestType::Sha256,
+                icv_len: 16,
+            }),
+        };
+
+        let codec = EspCodec::new(Ipv4Addr::LOCALHOST, Ipv4Addr::LOCALHOST, EspEncapType::None);
+        assert!(codec.encrypt(&params, b"payload").is_err());
     }
 
     #[test]
@@ -398,8 +699,11 @@ mod tests {
             sk_a: Bytes::copy_from_slice(
                 &hex::decode(b"b8321902c9aca5b5551f941629c1250d1c55161686a4ab3a22261f3416b4528d").unwrap(),
             ),
-            transform_id: TransformId::EspAesCbc,
-            auth_algorithm: EspAuthAlgorithm::HmacSha256,
+            cipher: CipherType::Aes256Cbc,
+            auth: Some(EspAuthentication {
+                digest: DigestType::Sha256,
+                icv_len: 16,
+            }),
         });
 
         let mut codec = EspCodec::new(

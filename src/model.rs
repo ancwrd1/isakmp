@@ -1,853 +1,105 @@
-use std::{fmt, io::Read, path::PathBuf, time::Duration};
+//! Types shared by the IKEv1 and IKEv2 models.
+//!
+//! The two versions agree on almost no wire numbering, so each keeps its own
+//! registries in [`crate::ikev1::model`] and [`crate::ikev2::model`]. What
+//! lives here is what they do share: the [`registry!`] macro both are written
+//! with, the attribute TLV both encode, and the version-neutral types that the
+//! crypto and ESP layers consume once a negotiation has resolved its own wire
+//! values.
 
-use bitflags::bitflags;
+use std::{io::Read, path::PathBuf};
+
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
 use secrecy::SecretString;
 
+use crate::crypto::{CipherType, DigestType};
+
+/// Check Point vendor ID, sent by both versions to ask the gateway for its
+/// proprietary extensions. The version-specific vendor IDs live in
+/// [`crate::ikev1::model`].
 pub const VID_CHECKPOINT: &[u8] = b"\xde\xfb\x99\xe6\x9a\x9f\x1f\x6e\x06\xf1\x50\x06\xb1\xf1\x66\xae";
-pub const VID_FRAGMENTATION: &[u8] = b"\x40\x48\xb7\xd5\x6e\xbc\xe8\x85\x25\xe7\xde\x7f\x00\xd6\xc2\xd3";
-pub const VID_NATT: &[u8] = b"\x4a\x13\x1c\x81\x07\x03\x58\x45\x5c\x57\x28\xf2\x0e\x95\x45\x2f";
-pub const VID_EXT_WITH_FLAGS: &[u8] =
-    b"\x3c\xf1\x87\xb2\x47\x40\x29\xea\x46\xac\x7f\xd0\xea\xf2\x89\xf5\x00\x00\x00\x03";
-pub const VID_INITIAL_CONTACT: &[u8] = b"\x26\x24\x4d\x38\xed\xdb\x61\xb3\x17\x2a\x36\xe3\xd0\xcf\xb8\x19";
-pub const VID_IPSEC_NAT_T: &[u8] = b"\x90\xcb\x80\x91\x3e\xbb\x69\x6e\x08\x63\x81\xb5\xec\x42\x7b\x1f";
-pub const VID_MS_NT5: &[u8] = b"\x1e\x2b\x51\x69\x05\x99\x1c\x7d\x7c\x96\xfc\xbf\xb5\x87\xe4\x61\x00\x00\x00\x04";
 
-bitflags! {
-    /// Represents a set of flags.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct IsakmpFlags: u8 {
-        const ENCRYPTION = 0b0000_0001;
-        const COMMIT = 0b0000_0010;
-        const AUTHENTICATION = 0b0000_0100;
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct SituationFlags: u32 {
-        const IDENTITY_ONLY = 0b0000_0001;
-        const SECRECY = 0b0000_0010;
-        const INTEGRITY = 0b0000_0100;
-    }
-}
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct SituationData {
-    pub level: Bytes,
-    pub category: Bytes,
-}
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct Situation {
-    pub labeled_domain_identifier: u32,
-    pub secrecy: Option<SituationData>,
-    pub integrity: Option<SituationData>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProtocolId {
-    Reserved,
-    #[default]
-    Isakmp,
-    IpsecAh,
-    IpsecEsp,
-    Ipcomp,
-    Other(u8),
-}
-
-impl From<u8> for ProtocolId {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::Reserved,
-            1 => Self::Isakmp,
-            2 => Self::IpsecAh,
-            3 => Self::IpsecEsp,
-            4 => Self::Ipcomp,
-            other => Self::Other(other),
+/// Declares a wire registry: an enum of the values a field is known to take,
+/// plus a fallback variant so unknown ones survive a decode/encode cycle
+/// unchanged, and the `From` conversions in both directions.
+///
+/// The fallback is named `Other` unless a different name is given with `as`.
+/// Attributes pass through, so `#[derive(Default)]` on the registry and
+/// `#[default]` on one variant work as usual.
+///
+/// ```ignore
+/// registry! {
+///     /// Exchange types, RFC 7296 §3.1.
+///     ExchangeType: u8 {
+///         IkeSaInit = 34,
+///         IkeAuth = 35,
+///     }
+/// }
+/// ```
+macro_rules! registry {
+    (
+        $(#[$meta:meta])* $name:ident : $repr:ty as $fallback:ident {
+            $($(#[$vmeta:meta])* $variant:ident = $value:expr),* $(,)?
         }
-    }
-}
-
-impl From<ProtocolId> for u8 {
-    fn from(value: ProtocolId) -> Self {
-        match value {
-            ProtocolId::Reserved => 0,
-            ProtocolId::Isakmp => 1,
-            ProtocolId::IpsecAh => 2,
-            ProtocolId::IpsecEsp => 3,
-            ProtocolId::Ipcomp => 4,
-            ProtocolId::Other(u) => u,
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum $name {
+            $($(#[$vmeta])* $variant,)*
+            $fallback($repr),
         }
-    }
-}
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TransformId {
-    Reserved,
-    #[default]
-    KeyIke,
-    Esp3Des,
-    EspAesCbc,
-    Other(u8),
-}
-
-impl From<u8> for TransformId {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::Reserved,
-            1 => Self::KeyIke,
-            3 => Self::Esp3Des,
-            12 => Self::EspAesCbc,
-            other => Self::Other(other),
+        impl From<$repr> for $name {
+            fn from(value: $repr) -> Self {
+                match value {
+                    $($value => Self::$variant,)*
+                    other => Self::$fallback(other),
+                }
+            }
         }
-    }
-}
 
-impl From<TransformId> for u8 {
-    fn from(value: TransformId) -> Self {
-        match value {
-            TransformId::Reserved => 0,
-            TransformId::KeyIke => 1,
-            TransformId::Esp3Des => 3,
-            TransformId::EspAesCbc => 12,
-            TransformId::Other(u) => u,
+        impl From<$name> for $repr {
+            fn from(value: $name) -> Self {
+                match value {
+                    $($name::$variant => $value,)*
+                    $name::$fallback(other) => other,
+                }
+            }
         }
-    }
-}
+    };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IkeEncryptionAlgorithm {
-    #[default]
-    AesCbc,
-    DesEde3Cbc,
-    Other(u16),
-}
-
-impl From<u16> for IkeEncryptionAlgorithm {
-    fn from(value: u16) -> Self {
-        match value {
-            7 => Self::AesCbc,
-            5 => Self::DesEde3Cbc,
-            other => Self::Other(other),
+    (
+        $(#[$meta:meta])* $name:ident : $repr:ty {
+            $($(#[$vmeta:meta])* $variant:ident = $value:expr),* $(,)?
         }
-    }
-}
-
-impl From<IkeEncryptionAlgorithm> for u16 {
-    fn from(value: IkeEncryptionAlgorithm) -> Self {
-        match value {
-            IkeEncryptionAlgorithm::AesCbc => 7,
-            IkeEncryptionAlgorithm::DesEde3Cbc => 5,
-            IkeEncryptionAlgorithm::Other(u) => u,
+    ) => {
+        registry! {
+            $(#[$meta])* $name : $repr as Other {
+                $($(#[$vmeta])* $variant = $value),*
+            }
         }
-    }
+    };
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IkeGroupDescription {
-    #[default]
-    Oakley2,
-    Oakley14,
-    Other(u16),
-}
+pub(crate) use registry;
 
-impl From<u16> for IkeGroupDescription {
-    fn from(value: u16) -> Self {
-        match value {
-            2 => Self::Oakley2,
-            14 => Self::Oakley14,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<IkeGroupDescription> for u16 {
-    fn from(value: IkeGroupDescription) -> Self {
-        match value {
-            IkeGroupDescription::Oakley2 => 2,
-            IkeGroupDescription::Oakley14 => 14,
-            IkeGroupDescription::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IkeHashAlgorithm {
-    Sha,
-    #[default]
-    Sha256,
-    Sha384,
-    Sha512,
-    Md5,
-    Other(u16),
-}
-
-impl From<u16> for IkeHashAlgorithm {
-    fn from(value: u16) -> Self {
-        match value {
-            1 => Self::Md5,
-            2 => Self::Sha,
-            4 => Self::Sha256,
-            5 => Self::Sha384,
-            6 => Self::Sha512,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<IkeHashAlgorithm> for u16 {
-    fn from(value: IkeHashAlgorithm) -> Self {
-        match value {
-            IkeHashAlgorithm::Md5 => 1,
-            IkeHashAlgorithm::Sha => 2,
-            IkeHashAlgorithm::Sha256 => 4,
-            IkeHashAlgorithm::Sha384 => 5,
-            IkeHashAlgorithm::Sha512 => 6,
-            IkeHashAlgorithm::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LifeType {
-    #[default]
-    Seconds,
-    Other(u16),
-}
-
-impl From<u16> for LifeType {
-    fn from(value: u16) -> Self {
-        match value {
-            1 => Self::Seconds,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<LifeType> for u16 {
-    fn from(value: LifeType) -> Self {
-        match value {
-            LifeType::Seconds => 1,
-            LifeType::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IkeAuthMethod {
-    RsaSignature,
-    #[default]
-    HybridInitRsa,
-    Other(u16),
-}
-
-impl From<u16> for IkeAuthMethod {
-    fn from(value: u16) -> Self {
-        match value {
-            3 => Self::RsaSignature,
-            64221 => Self::HybridInitRsa,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<IkeAuthMethod> for u16 {
-    fn from(value: IkeAuthMethod) -> Self {
-        match value {
-            IkeAuthMethod::RsaSignature => 3,
-            IkeAuthMethod::HybridInitRsa => 64221,
-            IkeAuthMethod::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EspAuthAlgorithm {
-    HmacSha96,
-    HmacSha160,
-    #[default]
-    HmacSha256,
-    HmacSha256v2,
-    Other(u16),
-}
-
-impl EspAuthAlgorithm {
-    pub fn key_len(&self) -> usize {
-        match self {
-            EspAuthAlgorithm::HmacSha96 | EspAuthAlgorithm::HmacSha160 => 20,
-            EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 32,
-            EspAuthAlgorithm::Other(_) => 0,
-        }
-    }
-
-    pub fn hash_len(&self) -> usize {
-        match self {
-            EspAuthAlgorithm::HmacSha96 => 12,
-            EspAuthAlgorithm::HmacSha160 => 20,
-            EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 16,
-            EspAuthAlgorithm::Other(_) => 0,
-        }
-    }
-}
-
-impl From<u16> for EspAuthAlgorithm {
-    fn from(value: u16) -> Self {
-        match value {
-            2 => Self::HmacSha96,
-            5 => Self::HmacSha256,
-            7 => Self::HmacSha160,
-            12 => Self::HmacSha256v2,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<EspAuthAlgorithm> for u16 {
-    fn from(value: EspAuthAlgorithm) -> Self {
-        match value {
-            EspAuthAlgorithm::HmacSha96 => 2,
-            EspAuthAlgorithm::HmacSha256 => 5,
-            EspAuthAlgorithm::HmacSha160 => 7,
-            EspAuthAlgorithm::HmacSha256v2 => 12,
-            EspAuthAlgorithm::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EspEncapMode {
-    #[default]
-    UdpTunnel,
-    CheckpointEspInUdp,
-    Other(u16),
-}
-
-impl From<u16> for EspEncapMode {
-    fn from(value: u16) -> Self {
-        match value {
-            3 => Self::UdpTunnel,
-            0xf003 => Self::CheckpointEspInUdp,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<EspEncapMode> for u16 {
-    fn from(value: EspEncapMode) -> Self {
-        match value {
-            EspEncapMode::UdpTunnel => 3,
-            EspEncapMode::CheckpointEspInUdp => 0xf003,
-            EspEncapMode::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IdentityType {
-    #[default]
-    Ipv4Address,
-    Ipv4Subnet,
-    UserFqdn,
-    DerAsn1Dn,
-    Other(u8),
-}
-
-impl From<u8> for IdentityType {
-    fn from(value: u8) -> Self {
-        match value {
-            1 => Self::Ipv4Address,
-            3 => Self::UserFqdn,
-            4 => Self::Ipv4Subnet,
-            9 => Self::DerAsn1Dn,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<IdentityType> for u8 {
-    fn from(value: IdentityType) -> Self {
-        match value {
-            IdentityType::Ipv4Address => 1,
-            IdentityType::UserFqdn => 3,
-            IdentityType::Ipv4Subnet => 4,
-            IdentityType::DerAsn1Dn => 9,
-            IdentityType::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NotifyMessageType {
-    #[default]
-    InvalidPayloadType,
-    DoiNotSupported,
-    SituationNotSupported,
-    InvalidCookie,
-    InvalidMajorVersion,
-    InvalidMinorVersion,
-    InvalidExchangeType,
-    InvalidFlags,
-    InvalidMessageId,
-    InvalidProtocolId,
-    InvalidSpi,
-    InvalidTransformId,
-    AttributesNotSupported,
-    NoProposalChosen,
-    BadProposalSyntax,
-    PayloadMalformed,
-    InvalidKeyInformation,
-    InvalidIdInformation,
-    InvalidCertEncoding,
-    InvalidCertificate,
-    CertTypeUnsupported,
-    InvalidCertAuthority,
-    InvalidHashInformation,
-    AuthenticationFailed,
-    InvalidSignature,
-    AddressNotification,
-    NotifySaLifeTime,
-    CertificateUnavailable,
-    UnsupportedExchangeType,
-    UnequalPayloadLengths,
-    CccAuth,
-    Other(u16),
-}
-
-impl From<u16> for NotifyMessageType {
-    fn from(value: u16) -> Self {
-        match value {
-            1 => Self::InvalidPayloadType,
-            2 => Self::DoiNotSupported,
-            3 => Self::SituationNotSupported,
-            4 => Self::InvalidCookie,
-            5 => Self::InvalidMajorVersion,
-            6 => Self::InvalidMinorVersion,
-            7 => Self::InvalidExchangeType,
-            8 => Self::InvalidFlags,
-            9 => Self::InvalidMessageId,
-            10 => Self::InvalidProtocolId,
-            11 => Self::InvalidSpi,
-            12 => Self::InvalidTransformId,
-            13 => Self::AttributesNotSupported,
-            14 => Self::NoProposalChosen,
-            15 => Self::BadProposalSyntax,
-            16 => Self::PayloadMalformed,
-            17 => Self::InvalidKeyInformation,
-            18 => Self::InvalidIdInformation,
-            19 => Self::InvalidCertEncoding,
-            20 => Self::InvalidCertificate,
-            21 => Self::CertTypeUnsupported,
-            22 => Self::InvalidCertAuthority,
-            23 => Self::InvalidHashInformation,
-            24 => Self::AuthenticationFailed,
-            25 => Self::InvalidSignature,
-            26 => Self::AddressNotification,
-            27 => Self::NotifySaLifeTime,
-            28 => Self::CertificateUnavailable,
-            29 => Self::UnsupportedExchangeType,
-            30 => Self::UnequalPayloadLengths,
-            0x8004 => Self::CccAuth,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<NotifyMessageType> for u16 {
-    fn from(value: NotifyMessageType) -> Self {
-        match value {
-            NotifyMessageType::InvalidPayloadType => 1,
-            NotifyMessageType::DoiNotSupported => 2,
-            NotifyMessageType::SituationNotSupported => 3,
-            NotifyMessageType::InvalidCookie => 4,
-            NotifyMessageType::InvalidMajorVersion => 5,
-            NotifyMessageType::InvalidMinorVersion => 6,
-            NotifyMessageType::InvalidExchangeType => 7,
-            NotifyMessageType::InvalidFlags => 8,
-            NotifyMessageType::InvalidMessageId => 9,
-            NotifyMessageType::InvalidProtocolId => 10,
-            NotifyMessageType::InvalidSpi => 11,
-            NotifyMessageType::InvalidTransformId => 12,
-            NotifyMessageType::AttributesNotSupported => 13,
-            NotifyMessageType::NoProposalChosen => 14,
-            NotifyMessageType::BadProposalSyntax => 15,
-            NotifyMessageType::PayloadMalformed => 16,
-            NotifyMessageType::InvalidKeyInformation => 17,
-            NotifyMessageType::InvalidIdInformation => 18,
-            NotifyMessageType::InvalidCertEncoding => 19,
-            NotifyMessageType::InvalidCertificate => 20,
-            NotifyMessageType::CertTypeUnsupported => 21,
-            NotifyMessageType::InvalidCertAuthority => 22,
-            NotifyMessageType::InvalidHashInformation => 23,
-            NotifyMessageType::AuthenticationFailed => 24,
-            NotifyMessageType::InvalidSignature => 25,
-            NotifyMessageType::AddressNotification => 26,
-            NotifyMessageType::NotifySaLifeTime => 27,
-            NotifyMessageType::CertificateUnavailable => 28,
-            NotifyMessageType::UnsupportedExchangeType => 29,
-            NotifyMessageType::UnequalPayloadLengths => 30,
-            NotifyMessageType::CccAuth => 0x8004,
-            NotifyMessageType::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum UserAuthType {
-    #[default]
-    Generic,
-    Other(u16),
-}
-
-impl From<u16> for UserAuthType {
-    fn from(value: u16) -> Self {
-        match value {
-            0 => Self::Generic,
-            other => Self::Other(other),
-        }
-    }
-}
-
-impl From<UserAuthType> for u16 {
-    fn from(value: UserAuthType) -> Self {
-        match value {
-            UserAuthType::Generic => 0,
-            UserAuthType::Other(u) => u,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PayloadType {
-    None,
-    SecurityAssociation,
-    Proposal,
-    Transform,
-    KeyExchange,
-    Identification,
-    Certificate,
-    CertificateRequest,
-    Hash,
-    Signature,
-    Nonce,
-    Notification,
-    Delete,
-    VendorId,
-    Attributes,
-    Natd,
-    MachineCertificate, // Checkpoint proprietary: PA_MCERT for hybrid auth
-    MachineSignature,   // Checkpoint proprietary: PA_MSIG for hybrid auth
-    Other(u8),
-}
-
-impl From<PayloadType> for u8 {
-    fn from(value: PayloadType) -> Self {
-        match value {
-            PayloadType::None => 0,
-            PayloadType::SecurityAssociation => 1,
-            PayloadType::Proposal => 2,
-            PayloadType::Transform => 3,
-            PayloadType::KeyExchange => 4,
-            PayloadType::Identification => 5,
-            PayloadType::Certificate => 6,
-            PayloadType::CertificateRequest => 7,
-            PayloadType::Hash => 8,
-            PayloadType::Signature => 9,
-            PayloadType::Nonce => 10,
-            PayloadType::Notification => 11,
-            PayloadType::Delete => 12,
-            PayloadType::VendorId => 13,
-            PayloadType::Attributes => 14,
-            PayloadType::Natd => 20,
-            PayloadType::Other(v) => v,
-            PayloadType::MachineCertificate => 0xf6,
-            PayloadType::MachineSignature => 0xf9,
-        }
-    }
-}
-
-impl From<u8> for PayloadType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => PayloadType::None,
-            1 => PayloadType::SecurityAssociation,
-            2 => PayloadType::Proposal,
-            3 => PayloadType::Transform,
-            4 => PayloadType::KeyExchange,
-            5 => PayloadType::Identification,
-            6 => PayloadType::Certificate,
-            7 => PayloadType::CertificateRequest,
-            8 => PayloadType::Hash,
-            9 => PayloadType::Signature,
-            10 => PayloadType::Nonce,
-            11 => PayloadType::Notification,
-            12 => PayloadType::Delete,
-            13 => PayloadType::VendorId,
-            14 => PayloadType::Attributes,
-            20 => PayloadType::Natd,
-            0xf6 => PayloadType::MachineCertificate,
-            0xf9 => PayloadType::MachineSignature,
-            v => PayloadType::Other(v),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ExchangeType {
-    None,
-    Base,
-    IdentityProtection,
-    AuthenticationOnly,
-    Aggressive,
-    Informational,
-    Transaction,
-    Quick,
-    Other(u8),
-}
-
-impl From<ExchangeType> for u8 {
-    fn from(value: ExchangeType) -> Self {
-        match value {
-            ExchangeType::None => 0,
-            ExchangeType::Base => 1,
-            ExchangeType::IdentityProtection => 2,
-            ExchangeType::AuthenticationOnly => 3,
-            ExchangeType::Aggressive => 4,
-            ExchangeType::Informational => 5,
-            ExchangeType::Transaction => 6,
-            ExchangeType::Quick => 32,
-            ExchangeType::Other(v) => v,
-        }
-    }
-}
-
-impl From<u8> for ExchangeType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => ExchangeType::None,
-            1 => ExchangeType::Base,
-            2 => ExchangeType::IdentityProtection,
-            3 => ExchangeType::AuthenticationOnly,
-            4 => ExchangeType::Aggressive,
-            5 => ExchangeType::Informational,
-            6 => ExchangeType::Transaction,
-            32 => ExchangeType::Quick,
-            other => ExchangeType::Other(other),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IkeAttributeType {
-    Unknown,
-    EncryptionAlgorithm,
-    HashAlgorithm,
-    AuthenticationMethod,
-    GroupDescription,
-    GroupType,
-    GroupPrime,
-    GroupGeneratorOne,
-    GroupGeneratorTwo,
-    GroupCurveA,
-    GroupCurveB,
-    LifeType,
-    LifeDuration,
-    Prf,
-    KeyLength,
-    FieldSize,
-    GroupOrder,
-    Other(u16),
-}
-
-impl From<IkeAttributeType> for u16 {
-    fn from(value: IkeAttributeType) -> Self {
-        match value {
-            IkeAttributeType::Unknown => 0,
-            IkeAttributeType::EncryptionAlgorithm => 1,
-            IkeAttributeType::HashAlgorithm => 2,
-            IkeAttributeType::AuthenticationMethod => 3,
-            IkeAttributeType::GroupDescription => 4,
-            IkeAttributeType::GroupType => 5,
-            IkeAttributeType::GroupPrime => 6,
-            IkeAttributeType::GroupGeneratorOne => 7,
-            IkeAttributeType::GroupGeneratorTwo => 8,
-            IkeAttributeType::GroupCurveA => 9,
-            IkeAttributeType::GroupCurveB => 10,
-            IkeAttributeType::LifeType => 11,
-            IkeAttributeType::LifeDuration => 12,
-            IkeAttributeType::Prf => 13,
-            IkeAttributeType::KeyLength => 14,
-            IkeAttributeType::FieldSize => 15,
-            IkeAttributeType::GroupOrder => 16,
-            IkeAttributeType::Other(v) => v,
-        }
-    }
-}
-
-impl From<u16> for IkeAttributeType {
-    fn from(value: u16) -> Self {
-        match value {
-            0 => IkeAttributeType::Unknown,
-            1 => IkeAttributeType::EncryptionAlgorithm,
-            2 => IkeAttributeType::HashAlgorithm,
-            3 => IkeAttributeType::AuthenticationMethod,
-            4 => IkeAttributeType::GroupDescription,
-            5 => IkeAttributeType::GroupType,
-            6 => IkeAttributeType::GroupPrime,
-            7 => IkeAttributeType::GroupGeneratorOne,
-            8 => IkeAttributeType::GroupGeneratorTwo,
-            9 => IkeAttributeType::GroupCurveA,
-            10 => IkeAttributeType::GroupCurveB,
-            11 => IkeAttributeType::LifeType,
-            12 => IkeAttributeType::LifeDuration,
-            13 => IkeAttributeType::Prf,
-            14 => IkeAttributeType::KeyLength,
-            15 => IkeAttributeType::FieldSize,
-            16 => IkeAttributeType::GroupOrder,
-            v => IkeAttributeType::Other(v),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EspAttributeType {
-    Unknown,
-    LifeType,
-    LifeDuration,
-    EncapsulationMode,
-    AuthenticationAlgorithm,
-    KeyLength,
-    Other(u16),
-}
-
-impl From<EspAttributeType> for u16 {
-    fn from(value: EspAttributeType) -> Self {
-        match value {
-            EspAttributeType::Unknown => 0,
-            EspAttributeType::LifeType => 1,
-            EspAttributeType::LifeDuration => 2,
-            EspAttributeType::EncapsulationMode => 4,
-            EspAttributeType::AuthenticationAlgorithm => 5,
-            EspAttributeType::KeyLength => 6,
-            EspAttributeType::Other(v) => v,
-        }
-    }
-}
-
-impl From<u16> for EspAttributeType {
-    fn from(value: u16) -> Self {
-        match value {
-            0 => EspAttributeType::Unknown,
-            1 => EspAttributeType::LifeType,
-            2 => EspAttributeType::LifeDuration,
-            4 => EspAttributeType::EncapsulationMode,
-            5 => EspAttributeType::AuthenticationAlgorithm,
-            6 => EspAttributeType::KeyLength,
-            v => EspAttributeType::Other(v),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ConfigAttributeType {
-    Ipv4Address,
-    Ipv4Netmask,
-    Ipv4Dns,
-    AddressExpiry,
-    AuthType,
-    UserName,
-    UserPassword,
-    Passcode,
-    Message,
-    Challenge,
-    Domain,
-    Status,
-    NextPin,
-    Answer,
-    InternalDomainName,
-    MacAddress,
-    CccSessionId,
-    CccVariableLeaseTime,
-    CccOfficeModeAllowed,
-    CccConnectAllowed,
-
-    Other(u16),
-}
-
-impl From<ConfigAttributeType> for u16 {
-    fn from(value: ConfigAttributeType) -> Self {
-        match value {
-            ConfigAttributeType::Ipv4Address => 1,
-            ConfigAttributeType::Ipv4Netmask => 2,
-            ConfigAttributeType::Ipv4Dns => 3,
-            ConfigAttributeType::AddressExpiry => 5,
-            ConfigAttributeType::AuthType => 13,
-            ConfigAttributeType::UserName => 14,
-            ConfigAttributeType::UserPassword => 15,
-            ConfigAttributeType::Passcode => 16,
-            ConfigAttributeType::Message => 17,
-            ConfigAttributeType::Challenge => 18,
-            ConfigAttributeType::Domain => 19,
-            ConfigAttributeType::Status => 20,
-            ConfigAttributeType::NextPin => 21,
-            ConfigAttributeType::Answer => 22,
-            ConfigAttributeType::InternalDomainName => 0x4003,
-            ConfigAttributeType::MacAddress => 0x4004,
-            ConfigAttributeType::CccSessionId => 0x4045,
-            ConfigAttributeType::CccVariableLeaseTime => 0x4046,
-            ConfigAttributeType::CccOfficeModeAllowed => 0x4047,
-            ConfigAttributeType::CccConnectAllowed => 0x404c,
-
-            ConfigAttributeType::Other(v) => v,
-        }
-    }
-}
-
-impl From<u16> for ConfigAttributeType {
-    fn from(value: u16) -> Self {
-        match value {
-            1 => ConfigAttributeType::Ipv4Address,
-            2 => ConfigAttributeType::Ipv4Netmask,
-            3 => ConfigAttributeType::Ipv4Dns,
-            5 => ConfigAttributeType::AddressExpiry,
-            13 => ConfigAttributeType::AuthType,
-            14 => ConfigAttributeType::UserName,
-            15 => ConfigAttributeType::UserPassword,
-            16 => ConfigAttributeType::Passcode,
-            17 => ConfigAttributeType::Message,
-            18 => ConfigAttributeType::Challenge,
-            19 => ConfigAttributeType::Domain,
-            20 => ConfigAttributeType::Status,
-            21 => ConfigAttributeType::NextPin,
-            22 => ConfigAttributeType::Answer,
-            0x4003 => ConfigAttributeType::InternalDomainName,
-            0x4004 => ConfigAttributeType::MacAddress,
-            0x4045 => ConfigAttributeType::CccSessionId,
-            0x4046 => ConfigAttributeType::CccVariableLeaseTime,
-            0x4047 => ConfigAttributeType::CccOfficeModeAllowed,
-            0x404c => ConfigAttributeType::CccConnectAllowed,
-            v => ConfigAttributeType::Other(v),
-        }
-    }
-}
-
+/// Value of a [`DataAttribute`]: either inline in the header or appended after
+/// an explicit length.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AttributeValue {
     Short(u16),
     Long(Bytes),
 }
 
-impl AttributeValue {
-    pub fn len(&self) -> usize {
-        match self {
-            AttributeValue::Short(_) => 2,
-            AttributeValue::Long(v) => v.len(),
-        }
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-#[derive(Clone, Eq, PartialEq)]
+/// The attribute TLV both versions encode the same way: RFC 2408 §3.3 for
+/// IKEv1 data attributes, RFC 7296 §3.3.5 for IKEv2 transform attributes. The
+/// top bit of the type selects between a 2-octet value carried in the length
+/// field and a length-prefixed one that follows.
+///
+/// The IKEv2 configuration payload uses a *different* TLV with no short form;
+/// see [`crate::ikev2::payload::ConfigurationAttribute`].
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DataAttribute {
     pub attribute_type: u16,
     pub value: AttributeValue,
@@ -897,8 +149,12 @@ impl DataAttribute {
         }
         buf.freeze()
     }
+
     pub fn len(&self) -> usize {
-        4 + if self.value.len() == 2 { 0 } else { self.value.len() }
+        match self.value {
+            AttributeValue::Short(_) => 4,
+            AttributeValue::Long(ref v) => 4 + v.len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -908,6 +164,7 @@ impl DataAttribute {
     pub fn parse<R: Read>(reader: &mut R) -> anyhow::Result<Self> {
         let attribute_type = reader.read_u16::<BigEndian>()?;
         let length_or_value = reader.read_u16::<BigEndian>()?;
+
         if (attribute_type & 0x8000) != 0 {
             Ok(Self {
                 attribute_type: attribute_type & 0x7fff,
@@ -922,114 +179,9 @@ impl DataAttribute {
             })
         }
     }
-
-    fn sanitized_value(&self) -> &AttributeValue {
-        static EMPTY: AttributeValue = AttributeValue::Long(Bytes::from_static(&[]));
-
-        match self.attribute_type.into() {
-            ConfigAttributeType::UserPassword | ConfigAttributeType::Passcode => &EMPTY,
-            _ => &self.value,
-        }
-    }
 }
 
-impl fmt::Debug for DataAttribute {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DataAttribute")
-            .field("attribute_type", &self.attribute_type)
-            .field("value", self.sanitized_value())
-            .finish()
-    }
-}
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CertificateType {
-    #[default]
-    None,
-    Pkcs7WrappedX509,
-    Pgp,
-    DnsSignedKey,
-    X509ForSignature,
-    X509ForKeyExchange,
-    KerberosTokens,
-    Crl,
-    Arl,
-    Spki,
-    X509ForAttribute,
-    Reserved(u8),
-}
-
-impl From<u8> for CertificateType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::None,
-            1 => Self::Pkcs7WrappedX509,
-            2 => Self::Pgp,
-            3 => Self::DnsSignedKey,
-            4 => Self::X509ForSignature,
-            5 => Self::X509ForKeyExchange,
-            6 => Self::KerberosTokens,
-            7 => Self::Crl,
-            8 => Self::Arl,
-            9 => Self::Spki,
-            10 => Self::X509ForAttribute,
-            other => Self::Reserved(other),
-        }
-    }
-}
-
-impl From<CertificateType> for u8 {
-    fn from(value: CertificateType) -> Self {
-        match value {
-            CertificateType::None => 0,
-            CertificateType::Pkcs7WrappedX509 => 1,
-            CertificateType::Pgp => 2,
-            CertificateType::DnsSignedKey => 3,
-            CertificateType::X509ForSignature => 4,
-            CertificateType::X509ForKeyExchange => 5,
-            CertificateType::KerberosTokens => 6,
-            CertificateType::Crl => 7,
-            CertificateType::Arl => 8,
-            CertificateType::Spki => 9,
-            CertificateType::X509ForAttribute => 10,
-            CertificateType::Reserved(v) => v,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AttributesPayloadType {
-    #[default]
-    Request,
-    Reply,
-    Set,
-    Ack,
-    Reserved(u8),
-}
-
-impl From<u8> for AttributesPayloadType {
-    fn from(value: u8) -> Self {
-        match value {
-            1 => Self::Request,
-            2 => Self::Reply,
-            3 => Self::Set,
-            4 => Self::Ack,
-            other => Self::Reserved(other),
-        }
-    }
-}
-
-impl From<AttributesPayloadType> for u8 {
-    fn from(value: AttributesPayloadType) -> Self {
-        match value {
-            AttributesPayloadType::Request => 1,
-            AttributesPayloadType::Reply => 2,
-            AttributesPayloadType::Set => 3,
-            AttributesPayloadType::Ack => 4,
-            AttributesPayloadType::Reserved(v) => v,
-        }
-    }
-}
-
+/// How the client proves who it is, whichever version negotiates it.
 #[derive(Debug, Clone, Default)]
 pub enum Identity {
     #[default]
@@ -1055,55 +207,40 @@ pub enum Identity {
     },
 }
 
+/// Integrity algorithm for an ESP SA, resolved from whichever IKE version
+/// negotiated it.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct EspAuthentication {
+    pub digest: DigestType,
+    /// Truncated ICV length carried in the packet, which is not always half
+    /// the digest size (HMAC-SHA1-160 keeps all 20 octets).
+    pub icv_len: usize,
+}
+
+/// Keys and algorithms for one ESP SA.
+///
+/// Deliberately version-neutral: the negotiating session resolves its own wire
+/// registry into these crypto types. The two versions cannot share a registry
+/// here — [`crate::ikev1::model::EspAuthAlgorithm`] reads 5 as HMAC-SHA2-256,
+/// while the same value in [`crate::ikev2::model::IntegrityAlgorithm`] is
+/// AUTH_AES_XCBC_96, which is not an HMAC at all. Carrying a raw transform
+/// number would silently select the wrong algorithm for one of the two.
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct EspCryptMaterial {
     pub spi: u32,
     pub sk_e: Bytes,
     pub sk_a: Bytes,
-    pub transform_id: TransformId,
-    pub auth_algorithm: EspAuthAlgorithm,
+    pub cipher: CipherType,
+    /// `None` for an AEAD cipher, which authenticates its own output.
+    pub auth: Option<EspAuthentication>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
-pub struct SaProposal {
-    pub initiator_spi: u64,
-    pub responder_spi: u64,
-    pub sa_bytes: Bytes,
-    pub hash_alg: IkeHashAlgorithm,
-    pub enc_alg: IkeEncryptionAlgorithm,
-    pub key_len: usize,
-    pub group: IkeGroupDescription,
-    pub lifetime: Duration,
-}
-
-impl fmt::Display for SaProposal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SaProposal")
-            .field("initiator_spi", &self.initiator_spi)
-            .field("responder_spi", &self.responder_spi)
-            .field("hash_alg", &self.hash_alg)
-            .field("enc_alg", &self.enc_alg)
-            .field("key_len", &self.key_len)
-            .field("group", &self.group)
-            .field("lifetime", &self.lifetime.as_secs())
-            .finish()
+impl EspCryptMaterial {
+    /// ICV length appended to each ESP packet.
+    pub fn icv_len(&self) -> usize {
+        match self.auth {
+            Some(auth) => auth.icv_len,
+            None => self.cipher.icv_len(),
+        }
     }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
-pub struct EspProposal {
-    pub spi_i: u32,
-    pub nonce_i: Bytes,
-    pub spi_r: u32,
-    pub nonce_r: Bytes,
-    pub transform_id: TransformId,
-    pub auth_alg: EspAuthAlgorithm,
-    pub key_len: usize,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
-pub struct IdentityRequest {
-    pub auth_blob: String,
-    pub internal_ca_fingerprints: Vec<String>,
-    pub with_mfa: bool,
 }

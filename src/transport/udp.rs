@@ -10,27 +10,26 @@ use tokio::{
 use tracing::{debug, trace};
 
 use crate::{
-    message::{IsakmpMessage, IsakmpMessageCodec},
-    transport::{IsakmpTransport, check_informational},
+    message::IsakmpMessageCodec,
+    transport::{IsakmpTransport, TransportMessage},
 };
 
 const NATT_PORT: u16 = 4500;
 
-pub struct UdpTransport {
+pub struct UdpTransport<M> {
     socket: Arc<UdpSocket>,
-    codec: Box<dyn IsakmpMessageCodec + Send + Sync>,
+    codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     message_offset: usize,
     receiver: Receiver<Bytes>,
 }
 
-impl UdpTransport {
-    pub fn new(socket: UdpSocket, codec: Box<dyn IsakmpMessageCodec + Send + Sync>) -> Self {
+impl<M> UdpTransport<M> {
+    pub fn new(socket: Arc<UdpSocket>, codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>) -> Self {
         let port = socket.peer_addr().map(|a| a.port()).unwrap_or_default();
         let (tx, rx) = channel(16);
 
         let message_offset = if port == NATT_PORT { 4 } else { 0 };
 
-        let socket = Arc::new(socket);
         let socket2 = socket.clone();
 
         tokio::spawn(async move {
@@ -54,8 +53,8 @@ impl UdpTransport {
 }
 
 #[async_trait]
-impl IsakmpTransport for UdpTransport {
-    async fn send(&mut self, message: &IsakmpMessage) -> anyhow::Result<()> {
+impl<M: TransportMessage> IsakmpTransport<M> for UdpTransport<M> {
+    async fn send(&mut self, message: &M) -> anyhow::Result<()> {
         let data = self.codec.encode(message)?;
         debug!(
             "Sending ISAKMP message, len: {}, to: {}",
@@ -64,6 +63,7 @@ impl IsakmpTransport for UdpTransport {
         );
 
         trace!("Sending ISAKMP message: {:#?}", message);
+        trace!("Sending raw bytes: {}", hex::encode(&data));
 
         if self.message_offset > 0 {
             let mut send_buffer = Vec::with_capacity(self.message_offset + data.len());
@@ -77,16 +77,18 @@ impl IsakmpTransport for UdpTransport {
         Ok(())
     }
 
-    async fn receive(&mut self, timeout: Duration) -> anyhow::Result<IsakmpMessage> {
+    async fn receive(&mut self, timeout: Duration) -> anyhow::Result<M> {
         let received_message = loop {
             let data = tokio::time::timeout(timeout, self.receiver.recv())
                 .await?
                 .context("Receive error")?;
 
+            trace!("Received raw bytes: {}", hex::encode(&data));
+
             match self.codec.decode(&data)? {
                 Some(msg) => {
                     trace!("Received ISAKMP message: {:#?}", msg);
-                    check_informational(&msg)?;
+                    msg.check_informational()?;
                     break msg;
                 }
                 None => continue,
