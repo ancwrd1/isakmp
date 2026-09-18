@@ -483,13 +483,8 @@ pub struct AuthResult {
     pub ts_i: Vec<TrafficSelector>,
     pub ts_r: Vec<TrafficSelector>,
     pub notifies: Vec<NotifyPayload>,
-    /// How long the office mode address stays valid, from
-    /// `INTERNAL_ADDRESS_EXPIRY` (RFC 7296 §3.15.1, a count of seconds).
-    /// `None` when the gateway did not answer with one.
-    ///
-    /// Deliberately not part of [`OfficeMode`], which is persisted: a new field
-    /// there would make sessions saved by an earlier build unreadable.
     pub address_expiry: Option<Duration>,
+    pub auth_log: Option<Bytes>,
 }
 
 struct AuthContext {
@@ -732,6 +727,11 @@ impl Ikev2Service {
             })
             .transpose()?;
 
+        let auth_log = response.payloads.iter().find_map(|p| match p {
+            Payload::Notify(payload) if payload.notify_type == NotifyType::CpRaAuthLog => Some(payload.data.clone()),
+            _ => None,
+        });
+
         let Some(eap) = eap else {
             anyhow::ensure!(
                 self.auth.as_ref().is_some_and(|auth| auth.authenticated),
@@ -740,7 +740,7 @@ impl Ikev2Service {
 
             debug!("Certificate authentication accepted, no EAP requested");
 
-            return self.finish(response).map(Box::new).map(Ikev2Step::Done);
+            return self.finish(response, auth_log).map(Box::new).map(Ikev2Step::Done);
         };
 
         match eap.code {
@@ -765,10 +765,10 @@ impl Ikev2Service {
             .exchange(ExchangeType::IkeAuth, vec![Payload::Authentication(auth)], None)
             .await?;
 
-        self.finish(response).map(Box::new).map(Ikev2Step::Done)
+        self.finish(response, auth_log).map(Box::new).map(Ikev2Step::Done)
     }
 
-    fn finish(&mut self, response: Ikev2Message) -> anyhow::Result<AuthResult> {
+    fn finish(&mut self, response: Ikev2Message, auth_log: Option<Bytes>) -> anyhow::Result<AuthResult> {
         let context = self.auth.take().context("IKE_AUTH is not running")?;
 
         let auth = response
@@ -824,6 +824,7 @@ impl Ikev2Service {
                 .context("No TSr payload in the final IKE_AUTH response")?,
             notifies: response.notifies().cloned().collect(),
             address_expiry,
+            auth_log,
         };
 
         let (esp_in, esp_out) = (self.session.esp_in(), self.session.esp_out());
