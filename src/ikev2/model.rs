@@ -481,8 +481,9 @@ registry! {
         InternalIp4Subnet = 13,
         SupportedAttributes = 14,
         InternalIp6Subnet = 15,
+        InternalDnsDomain = 25,
         // CheckPoint private attributes
-        InternalDnsDomain = 0x4003,
+        CccDomainName = 0x4003,
         CccSessionCookie = 0x4045,
         CccVariableLeaseTime = 0x4046,
         CccOfficeModeAllowed = 0x4047,

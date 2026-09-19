@@ -1248,21 +1248,13 @@ impl Ikev2Service {
                 ConfigurationAttributeType::InternalIp4Dns,
                 ConfigurationAttributeType::InternalIp4Nbns,
                 ConfigurationAttributeType::InternalAddressExpiry,
-                ConfigurationAttributeType::InternalDnsDomain,
-                ConfigurationAttributeType::CccVariableLeaseTime,
+                ConfigurationAttributeType::CccDomainName,
             ]
             .map(ConfigurationAttribute::request),
         );
 
         if with_session_cookie {
-            attributes.extend(
-                [
-                    ConfigurationAttributeType::CccSessionCookie,
-                    ConfigurationAttributeType::CccOfficeModeAllowed,
-                    ConfigurationAttributeType::CccConnectAllowed,
-                ]
-                .map(ConfigurationAttribute::request),
-            );
+            attributes.extend([ConfigurationAttributeType::CccSessionCookie].map(ConfigurationAttribute::request));
         }
 
         ConfigurationPayload {
@@ -1456,7 +1448,7 @@ impl Ikev2Service {
             dns: all(ConfigurationAttributeType::InternalIp4Dns)
                 .filter_map(|data| address(&data))
                 .collect(),
-            domains: all(ConfigurationAttributeType::InternalDnsDomain)
+            domains: all(ConfigurationAttributeType::CccDomainName)
                 .filter_map(|data| String::from_utf8(data.to_vec()).ok())
                 .flat_map(|domains| {
                     domains
@@ -2173,7 +2165,7 @@ mod tests {
                         data: Bytes::from_static(&[10, 0, 0, 2]),
                     },
                     ConfigurationAttribute {
-                        attribute_type: ConfigurationAttributeType::InternalDnsDomain,
+                        attribute_type: ConfigurationAttributeType::CccDomainName,
                         data: Bytes::from_static(b"example.com, vpn.example.com"),
                     },
                     // 32 ASCII hex characters, as the gateway sends it
@@ -3101,8 +3093,7 @@ mod tests {
                 ConfigurationAttributeType::InternalIp4Dns,
                 ConfigurationAttributeType::InternalIp4Nbns,
                 ConfigurationAttributeType::InternalAddressExpiry,
-                ConfigurationAttributeType::InternalDnsDomain,
-                ConfigurationAttributeType::CccVariableLeaseTime
+                ConfigurationAttributeType::CccDomainName,
             ]
         );
         assert_eq!(config.attributes[0].data, Bytes::copy_from_slice(&address.octets()));
