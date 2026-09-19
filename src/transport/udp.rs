@@ -3,10 +3,10 @@ use std::{iter, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::task::JoinHandle;
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{Receiver, channel},
+    task::JoinHandle,
 };
 use tracing::{debug, trace};
 

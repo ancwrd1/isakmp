@@ -12,12 +12,11 @@ use std::{fmt, time::Duration};
 use bitflags::bitflags;
 use bytes::Bytes;
 
+pub use crate::model::VID_CHECKPOINT;
 use crate::{
     crypto::DigestType,
     model::{EspAuthentication, registry},
 };
-
-pub use crate::model::VID_CHECKPOINT;
 
 pub const VID_FRAGMENTATION: &[u8] = b"\x40\x48\xb7\xd5\x6e\xbc\xe8\x85\x25\xe7\xde\x7f\x00\xd6\xc2\xd3";
 pub const VID_NATT: &[u8] = b"\x4a\x13\x1c\x81\x07\x03\x58\x45\x5c\x57\x28\xf2\x0e\x95\x45\x2f";

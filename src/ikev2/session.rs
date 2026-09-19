@@ -789,6 +789,7 @@ mod tests {
     };
     use secrecy::SecretString;
 
+    use super::*;
     use crate::{
         crypto::IcvLength,
         ikev2::{
@@ -798,8 +799,6 @@ mod tests {
         },
         payload::{BasicPayload, PayloadLike},
     };
-
-    use super::*;
 
     fn office_mode() -> OfficeMode {
         OfficeMode {

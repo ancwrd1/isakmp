@@ -388,7 +388,6 @@ impl IsakmpMessageCodec<Ikev2Message> for Ikev2Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::{
         crypto::{CipherType, DigestType, GroupType, IcvLength},
         ikev2::{

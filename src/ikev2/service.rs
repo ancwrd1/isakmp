@@ -1396,7 +1396,6 @@ mod tests {
     };
 
     use async_trait::async_trait;
-
     use openssl::{
         asn1::Asn1Time,
         hash::MessageDigest,
@@ -1408,6 +1407,7 @@ mod tests {
     };
     use secrecy::SecretString;
 
+    use super::*;
     use crate::{
         crypto::{CipherType, Crypto, DigestType, IcvLength},
         ikev2::{
@@ -1417,8 +1417,6 @@ mod tests {
         model::Identity,
         session::SessionType,
     };
-
-    use super::*;
 
     const LOCAL: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 39123);
     const GATEWAY: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(172, 24, 1, 5), 4500);
