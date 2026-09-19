@@ -1249,6 +1249,9 @@ impl Ikev2Service {
                 ConfigurationAttributeType::InternalIp4Nbns,
                 ConfigurationAttributeType::InternalAddressExpiry,
                 ConfigurationAttributeType::InternalDnsDomain,
+                ConfigurationAttributeType::CccVariableLeaseTime,
+                ConfigurationAttributeType::CccOfficeModeAllowed,
+                ConfigurationAttributeType::CccConnectAllowed,
             ]
             .map(ConfigurationAttribute::request),
         );

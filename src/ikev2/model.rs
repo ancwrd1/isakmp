@@ -484,6 +484,9 @@ registry! {
         // CheckPoint private attributes
         InternalDnsDomain = 0x4003,
         CccSessionCookie = 0x4045,
+        CccVariableLeaseTime = 0x4046,
+        CccOfficeModeAllowed = 0x4047,
+        CccConnectAllowed = 0x404c,
     }
 }
 
