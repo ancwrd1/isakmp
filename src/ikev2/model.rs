@@ -481,12 +481,8 @@ registry! {
         InternalIp4Subnet = 13,
         SupportedAttributes = 14,
         InternalIp6Subnet = 15,
-        /// RFC 8598; the Check Point client asks for it as DOMAIN_NAME.
-        InternalDnsDomain = 25,
-        /// Check Point's session cookie, the IKEv2 home of the IKEv1
-        /// `CccSessionId` attribute. **The number is an assumption**, as for
-        /// [`NotifyType::CccAuth`]: 0x4045 is the IKEv1 value, and the capture
-        /// gives the name only.
+        // CheckPoint private attributes
+        InternalDnsDomain = 0x4003,
         CccSessionCookie = 0x4045,
     }
 }
