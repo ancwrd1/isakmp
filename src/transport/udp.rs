@@ -3,6 +3,7 @@ use std::{iter, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
+use tokio::task::JoinHandle;
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{Receiver, channel},
@@ -21,6 +22,7 @@ pub struct UdpTransport<M> {
     codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     message_offset: usize,
     receiver: Receiver<Bytes>,
+    reader: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 impl<M> UdpTransport<M> {
@@ -32,7 +34,7 @@ impl<M> UdpTransport<M> {
 
         let socket2 = socket.clone();
 
-        tokio::spawn(async move {
+        let reader = tokio::spawn(async move {
             let mut receive_buffer = vec![0u8; 65536];
 
             while let Ok((len, _)) = socket2.recv_from(&mut receive_buffer).await {
@@ -48,6 +50,7 @@ impl<M> UdpTransport<M> {
             codec,
             message_offset,
             receiver: rx,
+            reader: Some(reader),
         }
     }
 }
@@ -99,4 +102,12 @@ impl<M: TransportMessage> IsakmpTransport<M> for UdpTransport<M> {
     }
 
     fn disconnect(&mut self) {}
+}
+
+impl<M> Drop for UdpTransport<M> {
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            reader.abort();
+        }
+    }
 }
