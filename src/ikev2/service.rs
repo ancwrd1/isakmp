@@ -1,8 +1,4 @@
 //! IKEv2 exchange state machine.
-//!
-//! IKEv1 spends two round trips on what IKEv2 does in one: IKE_SA_INIT carries
-//! the SA proposal, the D-H public value and the nonce together, so
-//! `do_sa_proposal` and `do_key_exchange` collapse into [`Ikev2Service::do_sa_init`].
 
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
@@ -46,8 +42,7 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(120);
 
 const MAX_SA_INIT_ATTEMPTS: usize = 3;
 
-/// RFC 7296 §2.10 wants at least 16 octets, and no less than half the PRF's
-/// key size.
+// RFC 7296 §2.10 wants at least 16 octets, and no less than half the PRF's key size.
 const CHILD_SA_NONCE_SIZE: usize = 32;
 
 const OFFERED_ENCRYPTION: [(EncryptionAlgorithm, Option<u16>); 3] = [
@@ -78,12 +73,7 @@ const OFFERED_GROUPS: [DhGroup; 5] = [
     DhGroup::Modp1024,
 ];
 
-/// RFC 7296 §2.23: `SHA1(SPIi | SPIr | IP | port)`, with SHA-1 fixed by the
-/// specification rather than negotiated.
-///
-/// The port is the socket's own, not a fixed one: the responder hashes the
-/// address *and port* it saw the packet come from, so a guessed port makes
-/// every comparison fail and reports a NAT that is not there.
+// RFC 7296 §2.23: `SHA1(SPIi | SPIr | IP | port)`, with SHA-1 fixed by the specification rather than negotiated.
 fn nat_detection_hash(initiator_spi: u64, responder_spi: u64, endpoint: SocketAddrV4) -> Bytes {
     let mut buf = BytesMut::with_capacity(22);
     buf.put_u64(initiator_spi);
@@ -455,9 +445,6 @@ pub enum Ikev2Step {
     Done(Box<AuthResult>),
 }
 
-/// What a renewed office mode lease settled. The gateway answers a renewal
-/// with the address and netmask only — no DNS or domains — so the rest of the
-/// configuration from login still stands.
 #[derive(Debug, Clone, Copy)]
 pub struct OfficeModeLease {
     pub address: Ipv4Addr,
@@ -465,11 +452,9 @@ pub struct OfficeModeLease {
     pub expiry: Option<Duration>,
 }
 
-/// What a peer-initiated exchange turned out to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerRequest {
-    /// The peer rekeyed the child SA. `esp_in`/`esp_out` now hold new keys and
-    /// SPIs, and the data path has to be reconfigured with them.
+    /// The peer rekeyed the child SA. `esp_in`/`esp_out` now hold new keys and SPIs
     ChildSaRekeyed,
     /// The peer deleted an SA. The tunnel is over.
     Deleted,
@@ -885,12 +870,6 @@ impl Ikev2Service {
         Ok(response)
     }
 
-    /// Rekeys the ESP child SA: a new one is created and keyed, then the one it
-    /// replaces is deleted (RFC 7296 §1.3.2).
-    ///
-    /// No Diffie-Hellman payload, so no PFS — the new keys come from `SK_d` and
-    /// this exchange's nonces. Afterwards [`IsakmpSession::esp_in`] and
-    /// [`IsakmpSession::esp_out`] carry the new material and SPIs.
     pub async fn rekey_child_sa(&mut self) -> anyhow::Result<()> {
         debug!("Rekeying the child SA");
 
@@ -899,11 +878,6 @@ impl Ikev2Service {
         self.establish_child_sa(Some(replacing)).await
     }
 
-    /// Creates a child SA where there is none, which is what a restored IKE SA
-    /// needs: the saved session carries the IKE keys but no ESP material.
-    ///
-    /// The same exchange as a rekey, without the `N(REKEY_SA)` that names an SA
-    /// to replace and without the DELETE that follows one (RFC 7296 §1.3.1).
     pub async fn create_child_sa(&mut self) -> anyhow::Result<()> {
         debug!("Creating a child SA");
 
@@ -959,7 +933,6 @@ impl Ikev2Service {
         }
     }
 
-    /// An INFORMATIONAL carrying a DELETE for one of our inbound ESP SAs.
     pub async fn delete_child_sa(&mut self, spi: u32) -> anyhow::Result<()> {
         debug!("Deleting child SA {:08x}", spi);
 
@@ -974,8 +947,6 @@ impl Ikev2Service {
         Ok(())
     }
 
-    /// An INFORMATIONAL carrying a DELETE for the IKE SA, which takes its child
-    /// SAs with it. A DELETE for an IKE SA carries no SPIs (RFC 7296 §3.11).
     pub async fn delete_ike_sa(&mut self) -> anyhow::Result<()> {
         debug!("Deleting the IKE SA");
 
@@ -990,17 +961,11 @@ impl Ikev2Service {
         Ok(())
     }
 
-    /// The session as a blob, for a caller that wants to resume it later.
-    /// Carries the Message ID as well as the keys, so a restored SA continues
-    /// the peer's window instead of replaying it.
     pub fn save_session(&mut self, office_mode: &OfficeMode) -> anyhow::Result<Vec<u8>> {
         self.session.set_message_id(self.message_id);
         self.session.save(office_mode)
     }
 
-    /// Restores a session saved by [`Ikev2Service::save_session`]. The IKE SA
-    /// is usable afterwards, but has no child SA: ESP material is not persisted,
-    /// so [`Ikev2Service::create_child_sa`] has to follow.
     pub fn load_session(&mut self, data: &[u8]) -> anyhow::Result<OfficeMode> {
         let office_mode = self.session.load(data)?;
         self.message_id = self.session.message_id();
@@ -1010,12 +975,6 @@ impl Ikev2Service {
         Ok(office_mode)
     }
 
-    /// Renews the office mode address lease: a CFG_REQUEST naming the address
-    /// we already hold, carried in an INFORMATIONAL exchange.
-    ///
-    /// This is what the Windows client does, at roughly half the lease. The
-    /// gateway answers with a CFG_REPLY carrying the address — the same one, in
-    /// every capture seen — and a fresh `INTERNAL_ADDRESS_EXPIRY`.
     pub async fn renew_office_mode(&mut self, address: Ipv4Addr) -> anyhow::Result<OfficeModeLease> {
         debug!("Renewing the office mode lease on {}", address);
 
@@ -1042,7 +1001,6 @@ impl Ikev2Service {
         Ok(lease)
     }
 
-    /// One IPv4-shaped configuration attribute out of a CFG_REPLY.
     fn config_address(response: &Ikev2Message, attribute_type: ConfigurationAttributeType) -> Option<Ipv4Addr> {
         response
             .payloads
@@ -1058,12 +1016,7 @@ impl Ikev2Service {
             .map(Ipv4Addr::from)
     }
 
-    /// Waits briefly for a request the peer may have opened, returning `None`
-    /// when none arrives in `timeout`.
-    ///
-    /// Nothing reads the IKE channel between exchanges, so a caller that wants
-    /// to notice a gateway-initiated rekey or delete has to come looking. Pair
-    /// it with [`Ikev2Service::handle_request`].
+    /// Waits briefly for a request the peer may have opened, returning `None` when none arrives in `timeout`.
     pub async fn poll_request(&mut self, timeout: Duration) -> anyhow::Result<Option<Ikev2Message>> {
         match self.transport.receive(timeout).await {
             Ok(message) if !message.is_response() => Ok(Some(message)),
@@ -1078,11 +1031,6 @@ impl Ikev2Service {
     }
 
     /// Answers a request the peer opened, and reports what it asked for.
-    ///
-    /// IKEv2 does not negotiate child SA lifetimes — each side rekeys on its
-    /// own policy — so the gateway opens a CREATE_CHILD_SA of its own, and an
-    /// unanswered one ends with it deleting the SA. The caller feeds anything
-    /// arriving outside its own exchanges here.
     pub async fn handle_request(&mut self, request: &Ikev2Message) -> anyhow::Result<PeerRequest> {
         anyhow::ensure!(!request.is_response(), "Not a peer request");
 
@@ -1091,15 +1039,14 @@ impl Ikev2Service {
             ExchangeType::Informational => {
                 let deleted = request.payloads.iter().any(|p| matches!(p, Payload::Delete(_)));
 
-                // RFC 7296 §2.4 wants a response even when there is nothing to
-                // say, and an empty one answers a DELETE too: the SA is going
-                // away either way.
+                // RFC 7296 §2.4 wants a response even when there is nothing to say
                 self.respond(request, Vec::new()).await?;
 
-                Ok(match deleted {
-                    true => PeerRequest::Deleted,
-                    false => PeerRequest::Other,
-                })
+                if deleted {
+                    Ok(PeerRequest::Deleted)
+                } else {
+                    Ok(PeerRequest::Other)
+                }
             }
             other => {
                 debug!("Ignoring a peer-initiated {:?}", other);
@@ -1108,8 +1055,6 @@ impl Ikev2Service {
         }
     }
 
-    /// The responder half of a child SA rekey: choose from what the peer
-    /// offered, answer with our own SPI and nonce, then key from both nonces.
     async fn answer_child_sa_rekey(&mut self, request: &Ikev2Message) -> anyhow::Result<PeerRequest> {
         debug!("Peer is rekeying the child SA");
 
@@ -1119,17 +1064,12 @@ impl Ikev2Service {
         let spi: u32 = random();
         let nonce = Bytes::copy_from_slice(&random::<[u8; CHILD_SA_NONCE_SIZE]>());
 
-        // The peer opened this exchange, so the SPI its proposal carries is the
-        // *initiator's*; `esp_proposal_from` parks it in `spi_r` because it is
-        // written for reading a response. Ours takes the responder's slot.
         let proposal = Ikev2EspProposal {
             spi_i: chosen.spi_r,
             spi_r: spi,
             ..chosen
         };
 
-        // the selectors are echoed rather than narrowed: this replaces an SA
-        // that already carries them
         let payloads = vec![
             Payload::SecurityAssociation(SecurityAssociationPayload {
                 proposals: vec![Self::echo_esp_proposal(spi, &proposal)],
@@ -1156,8 +1096,6 @@ impl Ikev2Service {
         Ok(PeerRequest::ChildSaRekeyed)
     }
 
-    /// Sends a response to a request the peer opened. Its Message ID belongs to
-    /// the peer's window, so ours is left alone.
     async fn respond(&mut self, request: &Ikev2Message, payloads: Vec<Payload>) -> anyhow::Result<()> {
         let response = Ikev2Message {
             initiator_spi: request.initiator_spi,
@@ -1183,7 +1121,6 @@ impl Ikev2Service {
             .context("No nonce payload")
     }
 
-    /// The first ESP proposal the peer offered that we can key.
     fn select_esp_proposal(request: &Ikev2Message) -> anyhow::Result<Ikev2EspProposal> {
         request
             .payloads
@@ -1198,7 +1135,6 @@ impl Ikev2Service {
             .context("No ESP proposal we can key")
     }
 
-    /// The chosen proposal alone, which is what a responder answers with.
     fn echo_esp_proposal(spi: u32, proposal: &Ikev2EspProposal) -> Proposal {
         let mut transforms = vec![Transform::encryption(
             proposal.encryption,
@@ -1233,9 +1169,6 @@ impl Ikev2Service {
         self.transport.send(&response).await
     }
 
-    /// CFG_REQUEST. `address` is empty at login and the address we already hold
-    /// when renewing it. The session cookie is asked for only at login: the
-    /// captured client leaves it out of a renewal.
     fn build_config_request(address: Option<Ipv4Addr>, with_session_cookie: bool) -> ConfigurationPayload {
         let mut attributes = vec![ConfigurationAttribute {
             attribute_type: ConfigurationAttributeType::InternalIp4Address,
@@ -1337,11 +1270,6 @@ impl Ikev2Service {
         })
     }
 
-    /// One ESP proposal read into the crypto parameters it names.
-    ///
-    /// The SPI the proposal carries lands in `spi_r` and `spi_i` is left zero,
-    /// which suits reading a response. Reading a *request* means the SPI is the
-    /// initiator's, so the caller swaps it — see `answer_child_sa_rekey`.
     fn esp_proposal_from(proposal: &Proposal) -> anyhow::Result<Ikev2EspProposal> {
         let encryption = proposal
             .find(TransformType::EncryptionAlgorithm)
@@ -1367,8 +1295,6 @@ impl Ikev2Service {
             .and_then(Transform::as_integrity)
             .unwrap_or(IntegrityAlgorithm::None);
 
-        // reject here rather than at keying time, so a proposal we cannot use
-        // is simply passed over when choosing among several
         encryption.to_cipher_type(key_len)?;
         integrity.to_authentication()?;
 

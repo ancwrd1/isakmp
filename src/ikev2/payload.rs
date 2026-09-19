@@ -1,8 +1,4 @@
 //! IKEv2 payload structures per RFC 7296 §3.
-//!
-//! Every payload is framed by the generic header in [`crate::payload`], so the
-//! structures here model only the body: `len` and `to_bytes` exclude those four
-//! bytes, matching [`crate::ikev1::payload`].
 
 use std::io::{Cursor, Read};
 

@@ -1,9 +1,4 @@
 //! EAP framing carried inside IKE_AUTH (RFC 3748 §4).
-//!
-//! Only the envelope lives here: the code, which tells the IKE_AUTH loop
-//! whether to keep going, the identifier, which every response must echo, and
-//! the method type. What a method's data *means* — EAP-GTC's prompt, the OTP
-//! flow behind it — is phase 6.
 
 use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -11,21 +6,18 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::ikev2::model::{EapCode, EapType};
 
-/// Code, identifier and length; Success and Failure are exactly this long.
+// Code, identifier and length; Success and Failure are exactly this long.
 const EAP_HEADER_LEN: usize = 4;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EapMessage {
     pub code: EapCode,
     pub identifier: u8,
-    /// Absent on Success and Failure, which carry nothing after the header.
     pub eap_type: Option<EapType>,
     pub data: Bytes,
 }
 
 impl EapMessage {
-    /// A response to `request`, echoing its identifier and method type as
-    /// RFC 3748 §4.1 requires.
     pub fn response(request: &EapMessage, data: Bytes) -> Self {
         Self {
             code: EapCode::Response,
@@ -35,7 +27,6 @@ impl EapMessage {
         }
     }
 
-    /// Whether this message ends the EAP conversation.
     pub fn is_final(&self) -> bool {
         matches!(self.code, EapCode::Success | EapCode::Failure)
     }

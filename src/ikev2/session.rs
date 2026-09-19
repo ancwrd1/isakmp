@@ -1,8 +1,4 @@
 //! IKEv2 session state and key schedule (RFC 7296 §2.14).
-//!
-//! The derivation shares nothing with IKEv1's beyond the use of a PRF: one
-//! SKEYSEED is folded out of the nonces and the D-H secret, and a single
-//! `prf+` stream is cut into seven keys, three of them per-direction.
 
 use std::{
     sync::{Arc, Mutex, MutexGuard},
@@ -29,17 +25,13 @@ use crate::{
     session::{EndpointData, IsakmpSession, OfficeMode, SessionType},
 };
 
-/// RFC 7296 §2.10 wants at least 16 octets, and at least half the negotiated
-/// PRF's key size: 32 satisfies every PRF in [`crate::ikev2::model`].
+// RFC 7296 §2.10 wants at least 16 octets, and at least half the negotiated
+// PRF's key size: 32 satisfies every PRF in [`crate::ikev2::model`].
 const NONCE_SIZE: usize = 32;
 
-/// RFC 7296 §2.15: the shared secret is run through the PRF with this string
-/// before it keys the AUTH payload.
+// RFC 7296 §2.15: the shared secret is run through the PRF with this string before it keys the AUTH payload.
 const KEY_PAD: &[u8] = b"Key Pad for IKEv2";
 
-/// Hashes tried, in order, when verifying an AUTH payload of method 1. The
-/// method does not name its hash — that is what RFC 7427 method 14 added — and
-/// RFC 7296 §3.8 only says SHA-1 SHOULD be supported.
 const RSA_AUTH_DIGESTS: [DigestType; 4] = [
     DigestType::Sha1,
     DigestType::Sha256,
@@ -47,22 +39,12 @@ const RSA_AUTH_DIGESTS: [DigestType; 4] = [
     DigestType::Sha512,
 ];
 
-/// Hash for the AUTH signature we produce, for the same reason: the method
-/// number does not carry one. SHA-1 is what the captured Check Point gateway
-/// signs its own AUTH with, and the only hash RFC 7296 §3.8 says an
-/// implementation SHOULD support here. [`Ikev2Session::set_signature_digest`]
-/// changes it.
+// RFC 7296 §3.8 only says SHA-1 SHOULD be supported.
 const DEFAULT_SIGNATURE_DIGEST: DigestType = DigestType::Sha1;
-
-/// Group for the KE payload, which goes out before the responder has chosen
-/// one. MODP-1024 is what the Check Point gateway selects, and what its own
-/// client sends KEi for; a responder wanting another group says so with
-/// INVALID_KE_PAYLOAD and [`Ikev2Session::set_dh_group`] answers it.
 const DEFAULT_GROUP: GroupType = GroupType::Oakley2;
 
-/// IKEv2 key schedule, RFC 7296 §2.14. `SK_d` seeds child-SA key material,
-/// `SK_a*`/`SK_e*` protect the SK payload in each direction, and `SK_p*` key
-/// the AUTH payloads.
+/// RFC 7296 §2.14. `SK_d` seeds child-SA key material, `SK_a*`/`SK_e*` protect the SK payload in each direction,
+/// and `SK_p*` key the AUTH payloads.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Ikev2SessionKeys {
     pub shared_secret: Bytes,
@@ -108,22 +90,14 @@ impl Ikev2Session {
         self.inner().crypto.group_type()
     }
 
-    /// Regenerates the D-H key pair for another group, after the responder has
-    /// rejected ours with INVALID_KE_PAYLOAD. The IKE SPIs and nonces are
-    /// kept: RFC 7296 §2.7 retries within the same IKE SA.
     pub fn set_dh_group(&self, group: GroupType) -> anyhow::Result<()> {
         self.inner().set_dh_group(group)
     }
 
-    /// Applies the transforms the responder selected. Must run before
-    /// [`Ikev2Session::init_from_ke`], and before anything clones the crypto
-    /// context.
     pub fn init_from_sa(&self, proposal: Ikev2SaProposal) -> anyhow::Result<()> {
         self.inner().init_from_sa(proposal)
     }
 
-    /// Completes the D-H exchange and derives the whole key schedule, leaving
-    /// the SA keyed: every later exchange is SK-framed.
     pub fn init_from_ke(&self, public_key_r: Bytes, nonce_r: Bytes) -> anyhow::Result<()> {
         self.inner().init_from_ke(public_key_r, nonce_r)
     }
@@ -149,13 +123,6 @@ impl Ikev2Session {
         self.inner().crypt.is_some()
     }
 
-    /// Records an IKE_SA_INIT message verbatim. The AUTH payload signs the
-    /// initiator's request and the responder's response octet for octet
-    /// (RFC 7296 §2.15), and a decoded message cannot be re-encoded to the
-    /// same bytes in general, so the codec hands them over as they pass.
-    ///
-    /// A COOKIE or INVALID_KE_PAYLOAD retry replaces the earlier pair, which
-    /// is what §2.15 wants: the exchange that keyed the SA is the one signed.
     pub fn set_sa_init_octets(&self, response: bool, data: Bytes) {
         let mut inner = self.inner();
         if response {
@@ -165,65 +132,42 @@ impl Ikev2Session {
         }
     }
 
-    /// Our IKE_SA_INIT request, verbatim.
     pub fn sa_init_request(&self) -> Bytes {
         self.inner().sa_init_request.clone()
     }
 
-    /// The responder's IKE_SA_INIT response, verbatim.
     pub fn sa_init_response(&self) -> Bytes {
         self.inner().sa_init_response.clone()
     }
 
     /// Whether the EAP-keyed AUTH payload runs the `"Key Pad for IKEv2"` step.
-    ///
-    /// RFC 7296 §2.16 says only that an EAP method without an MSK keys AUTH
-    /// from `SK_pi`/`SK_pr`; whether §2.15's inner `prf(secret, "Key Pad …")`
-    /// still applies is not spelled out. Defaults to `true`, which is what
-    /// strongSwan does — and a mismatch shows up as AUTHENTICATION_FAILED, or
-    /// as the warning [`Ikev2Session::verify_auth_r`] logs when the
-    /// responder's own AUTH verifies with the other variant.
+    /// Defaults to `true`, which is what strongSwan does — and a mismatch shows up as AUTHENTICATION_FAILED
     pub fn set_auth_key_pad(&self, key_pad: bool) {
         self.inner().auth_key_pad = key_pad;
     }
 
     /// `InitiatorSignedOctets` (RFC 7296 §2.15):
-    /// `RealMessage1 | NonceRData | prf(SK_pi, RestOfInitIDPayload)`, where
-    /// `id_i` is the IDi payload body — type, reserved and data, without the
-    /// generic payload header.
     pub fn signed_octets_i(&self, id_i: &[u8]) -> anyhow::Result<Bytes> {
         self.inner().signed_octets_i(id_i)
     }
 
     /// `ResponderSignedOctets`: the mirror, over the IKE_SA_INIT response, our
-    /// own nonce and `prf(SK_pr, RestOfRespIDPayload)`.
     pub fn signed_octets_r(&self, id_r: &[u8]) -> anyhow::Result<Bytes> {
         self.inner().signed_octets_r(id_r)
     }
 
-    /// Our AUTH payload for the shared-key method, keyed by `SK_pi` as
-    /// RFC 7296 §2.16 requires for an EAP method that establishes no key.
     pub fn auth_i(&self, id_i: &[u8]) -> anyhow::Result<AuthenticationPayload> {
         self.inner().auth_i(id_i)
     }
 
-    /// Our AUTH payload for the certificate method (AUTH method 1), signed by
-    /// the client certificate's private key. This is what the machine
-    /// authentication round of an RFC 4739 multiple-auth exchange carries —
-    /// the IKEv2 home of IKEv1's `PA_MCERT`/`PA_MSIG` payloads.
     pub fn auth_i_signature(&self, id_i: &[u8]) -> anyhow::Result<AuthenticationPayload> {
         self.inner().auth_i_signature(id_i)
     }
 
-    /// The hash our own AUTH signature uses. AUTH method 1 does not name it on
-    /// the wire — that is what RFC 7427 method 14 added — so both ends have to
-    /// agree out of band. Defaults to [`DEFAULT_SIGNATURE_DIGEST`].
     pub fn set_signature_digest(&self, digest: DigestType) {
         self.inner().signature_digest = digest;
     }
 
-    /// Verifies the responder's AUTH payload against its ID and, for a
-    /// signature method, the certificate it sent.
     pub fn verify_auth_r(
         &self,
         id_r: &[u8],
@@ -250,9 +194,6 @@ impl Ikev2Session {
         self.inner().rekey_child_sa(proposal, nonce_i, nonce_r, we_initiated)
     }
 
-    /// The exchange counter carried across a save and restore. It belongs to
-    /// the service, which owns it while a session is running; the session only
-    /// carries it so that [`IsakmpSession::save`] can persist it.
     pub fn message_id(&self) -> u32 {
         self.inner().message_id
     }
@@ -261,7 +202,6 @@ impl Ikev2Session {
         self.inner().message_id = message_id;
     }
 
-    /// Records the `AUTH_LIFETIME` the responder sent.
     pub fn set_lifetime(&self, lifetime: Duration) {
         self.inner().lifetime = lifetime;
     }
@@ -321,20 +261,15 @@ struct Ikev2SessionStore {
     prf_type: DigestType,
     cipher_type: CipherType,
     group_type: GroupType,
-    /// Stored as the wire value: the registry is a plain enum, not `Serialize`.
     integrity: u16,
     lifetime: Duration,
     timestamp: u64,
-    /// The exchange counter, which has to carry over: a restored IKE SA
-    /// continues the peer's Message ID window rather than starting again.
     message_id: u32,
 }
 
 struct Ikev2SessionImpl {
     session_type: SessionType,
     hybrid_auth: bool,
-    /// Shared with [`Ikev2Crypt`] once keyed, so the SK framing and the key
-    /// schedule cannot drift apart — and so the D-H key pair is generated once.
     crypto: Arc<Crypto>,
     integrity: IntegrityAlgorithm,
     client_cert: Option<Arc<dyn ClientCertificate + Send + Sync>>,
@@ -357,8 +292,6 @@ impl Ikev2SessionImpl {
     fn new(identity: Identity, session_type: SessionType, group: GroupType) -> anyhow::Result<Self> {
         let (hybrid_auth, client_cert) = crate::certs::load_identity(identity)?;
 
-        // Placeholders until IKE_SA_INIT completes: only the group matters
-        // before then, since it fixes the KE payload we are about to send.
         let crypto = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, group)?;
         let public_key = crypto.public_key()?;
 
@@ -404,7 +337,6 @@ impl Ikev2SessionImpl {
         })
     }
 
-    /// The endpoint whose key pair we hold.
     fn set_local_public_key(&mut self, public_key: Bytes) {
         match self.session_type {
             SessionType::Initiator => {
@@ -447,17 +379,11 @@ impl Ikev2SessionImpl {
             );
         }
 
-        // With an AEAD cipher there is no integrity transform to take a digest
-        // from, and none is used: the PRF stands in so `Crypto` stays whole.
         let digest = match proposal.integrity {
             IntegrityAlgorithm::None => prf,
             integrity => integrity.to_digest_type()?,
         };
 
-        // The group comes from the responder's KE payload (RFC 7296 §3.4), so
-        // this is the check that matters: we hold a private key for exactly one
-        // group, and a responder wanting another has to say so with
-        // INVALID_KE_PAYLOAD before sending a KE of its own.
         let group = proposal.dh_group.to_group_type()?;
         if group != self.crypto.group_type() {
             anyhow::bail!(
@@ -484,8 +410,6 @@ impl Ikev2SessionImpl {
             ..(*self.responder).clone()
         });
 
-        // one line per session, and the first thing to look at when a peer
-        // discards our SK payloads
         debug!(
             "Negotiated IKE SA: {:?}/{} {:?} {:?} {:?}",
             proposal.encryption, proposal.key_len, proposal.prf, proposal.integrity, proposal.dh_group
@@ -623,8 +547,8 @@ impl Ikev2SessionImpl {
         )
     }
 
-    /// RFC 7296 §2.15: `prf(prf(Shared Secret, "Key Pad for IKEv2"), octets)`,
-    /// or the outer PRF alone where the padding step does not apply.
+    /// RFC 7296 §2.15: `prf(prf(Shared Secret, "Key Pad for IKEv2"), octets)`, or the outer PRF alone
+    /// where the padding step does not apply.
     fn auth_shared_key(&self, signed_octets: &[u8], secret: &[u8], key_pad: bool) -> anyhow::Result<Bytes> {
         let key = if key_pad {
             self.crypto.prf(secret, [KEY_PAD])?
@@ -644,10 +568,7 @@ impl Ikev2SessionImpl {
         })
     }
 
-    /// RFC 7296 §3.8 method 1: RSASSA-PKCS1-v1_5 over the initiator's signed
-    /// octets, made by the certificate's own key. The key may live in a PKCS#11
-    /// token or the Windows store, so the DigestInfo is built here and the
-    /// certificate only pads and encrypts it.
+    /// RFC 7296 §3.8 method 1: RSASSA-PKCS1-v1_5 over the initiator's signed octets
     fn auth_i_signature(&self, id_i: &[u8]) -> anyhow::Result<AuthenticationPayload> {
         let certificate = self
             .client_cert
@@ -679,9 +600,6 @@ impl Ikev2SessionImpl {
                     return Ok(());
                 }
 
-                // The padding step is the one part of §2.16 that is not
-                // spelled out, so say so rather than reporting a bare
-                // mismatch: the fix is one call to `set_auth_key_pad`.
                 let other = self.auth_shared_key(&octets, &self.session_keys.sk_pr, !self.auth_key_pad)?;
                 if openssl::memcmp::eq(&other, &auth.data) {
                     warn!(
@@ -712,11 +630,7 @@ impl Ikev2SessionImpl {
         }
     }
 
-    /// RFC 7296 §2.17: `KEYMAT = prf+(SK_d, Ni | Nr)` for the child SA created
-    /// by IKE_AUTH, cut into the initiator's encryption and integrity keys and
-    /// then the responder's. Packets we send carry the SPI the responder chose,
-    /// and vice versa.
-    /// The first child SA, keyed from the IKE_SA_INIT nonces (RFC 7296 §2.17).
+    /// RFC 7296 §2.17: `KEYMAT = prf+(SK_d, Ni | Nr)` for the child SA created by IKE_AUTH
     fn init_from_child_sa(&mut self, proposal: Ikev2EspProposal) -> anyhow::Result<()> {
         let nonces = [self.initiator.nonce.as_ref(), self.responder.nonce.as_ref()].concat();
         let we_initiated = self.session_type == SessionType::Initiator;
@@ -724,13 +638,6 @@ impl Ikev2SessionImpl {
         self.key_child_sa(proposal, &nonces, we_initiated)
     }
 
-    /// A child SA replacing an earlier one, keyed from the CREATE_CHILD_SA
-    /// exchange's *own* nonces rather than IKE_SA_INIT's.
-    ///
-    /// `we_initiated` says who sent the request, which fixes both the nonce
-    /// order and the key order: RFC 7296 §2.17 takes the initiator-to-responder
-    /// keys first, and for a rekey the initiator is whoever opened *this*
-    /// exchange — not necessarily the one who opened the IKE SA.
     fn rekey_child_sa(
         &mut self,
         proposal: Ikev2EspProposal,
@@ -744,10 +651,6 @@ impl Ikev2SessionImpl {
     }
 
     fn key_child_sa(&mut self, proposal: Ikev2EspProposal, nonces: &[u8], we_initiated: bool) -> anyhow::Result<()> {
-        // As for the IKE SA: an AEAD cipher authenticates its own output and
-        // must be paired with INTEG_NONE. The two are offered as separate
-        // proposals, so a mixture is a responder answering with something we
-        // never proposed.
         if proposal.encryption.is_aead() != (proposal.integrity == IntegrityAlgorithm::None) {
             anyhow::bail!(
                 "Responder chose {:?} with {:?} for the child SA, which cannot be keyed",
@@ -776,9 +679,6 @@ impl Ikev2SessionImpl {
             key
         };
 
-        // initiator -> responder first, then responder -> initiator. Packets
-        // travelling that way carry the *receiver's* SPI, so the i->r material
-        // is keyed with the responder's.
         let i_to_r = EspCryptMaterial {
             spi: proposal.spi_r,
             sk_e: take(enc_len),
@@ -794,9 +694,10 @@ impl Ikev2SessionImpl {
             auth: authentication,
         };
 
-        let (esp_out, esp_in) = match we_initiated {
-            true => (i_to_r, r_to_i),
-            false => (r_to_i, i_to_r),
+        let (esp_out, esp_in) = if we_initiated {
+            (i_to_r, r_to_i)
+        } else {
+            (r_to_i, i_to_r)
         };
 
         self.initiator = Arc::new(EndpointData {

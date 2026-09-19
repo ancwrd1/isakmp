@@ -1,10 +1,4 @@
 //! IKEv2 message framing: the fixed header and the SK (Encrypted) payload.
-//!
-//! IKEv1 marks a whole message encrypted with a header flag and encrypts
-//! everything after the header. IKEv2 instead wraps every payload of a keyed
-//! exchange in a single SK payload holding `IV | ciphertext | ICV`, where the
-//! ciphertext covers the inner payload chain plus padding, and the integrity
-//! check covers the message from its first octet through the ciphertext.
 
 use std::{io::Cursor, sync::Arc};
 
@@ -24,21 +18,13 @@ use crate::{
     message::{IKEV2_VERSION, ISAKMP_HEADER_LEN, IsakmpMessageCodec},
 };
 
-/// Keys for one direction of an IKE SA: `SK_ei`/`SK_ai` outbound and
-/// `SK_er`/`SK_ar` inbound for an initiator, swapped for a responder.
 #[derive(Debug, Clone, Default)]
 pub struct DirectionalKeys {
-    /// `SK_e`, with the 4-octet salt appended for an AEAD cipher.
     pub sk_e: Bytes,
-    /// `SK_a`, empty for an AEAD cipher.
     pub sk_a: Bytes,
 }
 
-/// The SK payload crypto context, built by the session once the key schedule
-/// has run.
 pub struct Ikev2Crypt {
-    /// Shared with the session, which needs the same negotiated parameters for
-    /// the key schedule and holds the D-H key pair behind them.
     crypto: Arc<Crypto>,
     checksum_len: usize,
     outbound: DirectionalKeys,
@@ -60,9 +46,6 @@ impl Ikev2Crypt {
                 anyhow::bail!("AEAD cipher must be negotiated with INTEG_NONE, got {integrity:?}");
             }
         } else {
-            // `Crypto::integrity` truncates per RFC 4868, so a transform that
-            // truncates differently (the 128/160-bit variants) would silently
-            // produce the wrong checksum length.
             if checksum_len != crypto.integrity_len() {
                 anyhow::bail!(
                     "Integrity transform {integrity:?} wants a {checksum_len}-byte checksum, \
@@ -116,8 +99,8 @@ impl Ikev2Crypt {
     }
 }
 
-/// Pads `plaintext` to the cipher's block size, appending the Pad Length octet
-/// (RFC 7296 §3.14). Padding content is unspecified; zeroes are conventional.
+// Pads `plaintext` to the cipher's block size, appending the Pad Length octet
+// (RFC 7296 §3.14). Padding content is unspecified; zeroes are conventional.
 fn pad(plaintext: &[u8], block_size: usize) -> Bytes {
     let pad_len = (block_size - ((plaintext.len() + 1) % block_size)) % block_size;
 
@@ -137,19 +120,12 @@ fn unpad(plaintext: &[u8]) -> anyhow::Result<Bytes> {
         .context("SK padding longer than the plaintext")
 }
 
-/// A fresh IV for each message. For AEAD this is the explicit half of the
-/// nonce and must never repeat under one key; 64 random bits give a collision
-/// margin far beyond the number of messages an IKE SA will ever carry.
 fn random_bytes(len: usize) -> Bytes {
     let mut buf = vec![0u8; len];
     rand::fill(&mut buf[..]);
     buf.into()
 }
 
-/// Where a codec gets its SK keys. A codec bound to a session picks them up as
-/// soon as the key schedule installs them, which is what the transport needs:
-/// it is built around one codec before IKE_SA_INIT and keeps it for the life of
-/// the SA. A fixed codec is for tests and for framing with known keys.
 enum CryptSource {
     Fixed(Option<Arc<Ikev2Crypt>>),
     Session(Ikev2Session),
@@ -188,22 +164,17 @@ impl Ikev2Codec {
         }
     }
 
-    /// A codec that follows a session: unprotected until the key schedule has
-    /// run, SK-framed afterwards, with no further wiring.
+    /// A codec that follows a session
     pub fn for_session(session: Ikev2Session) -> Self {
         Self {
             source: CryptSource::Session(session),
         }
     }
 
-    /// Installs the SK keys once the key schedule has run.
     pub fn set_crypt(&mut self, crypt: Ikev2Crypt) {
         self.source = CryptSource::Fixed(Some(Arc::new(crypt)));
     }
 
-    /// Hands the verbatim octets of an IKE_SA_INIT message to the session: the
-    /// AUTH payload signs them (RFC 7296 §2.15) and they are unavailable
-    /// anywhere else, since the transport only ever yields decoded messages.
     fn record_sa_init(&self, message: &Ikev2Message, data: &[u8]) {
         if message.exchange_type == ExchangeType::IkeSaInit
             && let CryptSource::Session(session) = &self.source
@@ -225,8 +196,6 @@ impl Ikev2Codec {
         buf.freeze()
     }
 
-    /// Wraps the payload chain in an SK payload: header, SK generic header, IV,
-    /// ciphertext and ICV, with the ICV computed over everything before it.
     fn encode_encrypted(&self, message: &Ikev2Message, crypt: &Ikev2Crypt) -> anyhow::Result<Bytes> {
         let inner = Payload::write_all(&message.payloads);
         let plaintext = pad(&inner, crypt.crypto.block_size());

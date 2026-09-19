@@ -1,9 +1,4 @@
 //! IKEv2 numeric registries per RFC 7296.
-//!
-//! IKEv2 shares no payload numbering, exchange numbering or transform encoding
-//! with IKEv1, so these live alongside [`crate::ikev1::model`] rather than
-//! inside [`crate::model`]. Both are built with [`crate::model::registry`], so
-//! every value round-trips through an `Other` fallback unchanged.
 
 use bitflags::bitflags;
 
