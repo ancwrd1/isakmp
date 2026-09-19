@@ -1250,16 +1250,19 @@ impl Ikev2Service {
                 ConfigurationAttributeType::InternalAddressExpiry,
                 ConfigurationAttributeType::InternalDnsDomain,
                 ConfigurationAttributeType::CccVariableLeaseTime,
-                ConfigurationAttributeType::CccOfficeModeAllowed,
-                ConfigurationAttributeType::CccConnectAllowed,
             ]
             .map(ConfigurationAttribute::request),
         );
 
         if with_session_cookie {
-            attributes.push(ConfigurationAttribute::request(
-                ConfigurationAttributeType::CccSessionCookie,
-            ));
+            attributes.extend(
+                [
+                    ConfigurationAttributeType::CccSessionCookie,
+                    ConfigurationAttributeType::CccOfficeModeAllowed,
+                    ConfigurationAttributeType::CccConnectAllowed,
+                ]
+                .map(ConfigurationAttribute::request),
+            );
         }
 
         ConfigurationPayload {
@@ -3099,6 +3102,7 @@ mod tests {
                 ConfigurationAttributeType::InternalIp4Nbns,
                 ConfigurationAttributeType::InternalAddressExpiry,
                 ConfigurationAttributeType::InternalDnsDomain,
+                ConfigurationAttributeType::CccVariableLeaseTime
             ]
         );
         assert_eq!(config.attributes[0].data, Bytes::copy_from_slice(&address.octets()));
