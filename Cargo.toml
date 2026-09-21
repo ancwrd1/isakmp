@@ -19,7 +19,7 @@ async-trait = "0.1"
 tracing = "0.1"
 itertools = "0.15"
 cryptoki = "0.12"
-serde = { version = "1.0.208", features = ["rc", "derive"] }
+serde = { version = "1", features = ["rc", "derive"] }
 rmp-serde = "1"
 pnet_packet = "0.35"
 pnet_macros = "0.35"
