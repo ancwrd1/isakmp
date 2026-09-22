@@ -1378,7 +1378,7 @@ impl Ikev2Service {
                 .filter_map(|data| String::from_utf8(data.to_vec()).ok())
                 .flat_map(|domains| {
                     domains
-                        .split(',')
+                        .split([',', ';'])
                         .map(|domain| domain.trim().to_owned())
                         .filter(|domain| !domain.is_empty())
                         .collect::<Vec<_>>()
