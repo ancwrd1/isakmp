@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+extern crate core;
 
 pub mod certs;
 pub mod crypto;

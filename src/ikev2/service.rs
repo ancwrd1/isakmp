@@ -692,7 +692,7 @@ impl Ikev2Service {
         let response = self
             .exchange(
                 ExchangeType::IkeAuth,
-                vec![Payload::Eap(BasicPayload::new(
+                vec![Payload::Eap(BasicPayload::new_sensitive(
                     EapMessage::response(&pending, answer).to_bytes(),
                 ))],
                 Some(AUTH_TIMEOUT),

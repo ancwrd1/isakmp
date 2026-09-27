@@ -6,6 +6,7 @@
 //! structures each version defines model the *body* alone, so their `len` and
 //! `to_bytes` exclude those four bytes; this module owns the header itself.
 
+use core::fmt;
 use std::io::Read;
 
 use anyhow::Context;
@@ -75,14 +76,29 @@ pub(crate) fn write_payload(buf: &mut BytesMut, next_payload: u8, body: &Bytes) 
 
 /// A payload whose body is opaque: nonce, vendor ID, hash, EAP, SK, or
 /// anything unrecognised.
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct BasicPayload {
     pub data: Bytes,
+    pub sensitive: bool,
+}
+
+impl fmt::Debug for BasicPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        static SENSITIVE: Bytes = Bytes::from_static(b"****");
+
+        f.debug_struct("BasicPayload")
+            .field("data", if self.sensitive { &SENSITIVE } else { &self.data })
+            .finish()
+    }
 }
 
 impl BasicPayload {
     pub fn new(data: Bytes) -> Self {
-        Self { data }
+        Self { data, sensitive: false }
+    }
+
+    pub fn new_sensitive(data: Bytes) -> Self {
+        Self { data, sensitive: true }
     }
 }
 
@@ -104,6 +120,7 @@ impl PayloadLike for BasicPayload {
     fn parse<R: Read>(reader: &mut R) -> anyhow::Result<Self> {
         Ok(Self {
             data: read_to_end(reader)?,
+            sensitive: false,
         })
     }
 }
