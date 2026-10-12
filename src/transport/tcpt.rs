@@ -225,8 +225,6 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
             let data = match do_receive(self.data_type, stream, timeout).await {
                 Ok(data) => data,
                 Err(e) => {
-                    warn!("{}", e);
-                    self.disconnect();
                     return Err(e);
                 }
             };
