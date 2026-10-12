@@ -31,7 +31,7 @@ secrecy = "0.10"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
-opener = "0.8"
+opener = "0.9"
 secrecy = "0.10"
 regex = "1"
 tokio = { version = "1", features = ["full"]}
