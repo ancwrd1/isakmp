@@ -17,6 +17,15 @@ use crate::{
 
 const NATT_PORT: u16 = 4500;
 
+/// Returns the IKE message carried by a datagram received with `marker_len` bytes of Non-ESP Marker
+/// (RFC 3948 §2.2), or `None` for anything else sharing the port: a datagram too short for the
+/// marker, such as the one-byte NAT-keepalive (RFC 3948 §2.3), or an ESP packet, whose SPI in place
+/// of the marker is never zero.
+fn strip_non_esp_marker(data: &[u8], marker_len: usize) -> Option<&[u8]> {
+    let (marker, message) = data.split_at_checked(marker_len)?;
+    marker.iter().all(|b| *b == 0).then_some(message)
+}
+
 pub struct UdpTransport<M> {
     socket: Arc<UdpSocket>,
     codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
@@ -38,9 +47,12 @@ impl<M> UdpTransport<M> {
             let mut receive_buffer = vec![0u8; 65536];
 
             while let Ok((len, _)) = socket2.recv_from(&mut receive_buffer).await {
-                let data = receive_buffer[message_offset..len].to_vec().into();
+                let Some(data) = strip_non_esp_marker(&receive_buffer[..len], message_offset) else {
+                    debug!("Discarding non-IKE datagram, len: {}", len);
+                    continue;
+                };
                 debug!("Received ISAKMP message, len: {}", len);
-                tx.send(data).await?;
+                tx.send(Bytes::copy_from_slice(data)).await?;
             }
             Ok::<_, anyhow::Error>(())
         });
@@ -109,5 +121,22 @@ impl<M> Drop for UdpTransport<M> {
         if let Some(reader) = self.reader.take() {
             reader.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_non_esp_marker() {
+        assert_eq!(strip_non_esp_marker(&[0, 0, 0, 0, 1, 2], 4), Some(&[1, 2][..]));
+        assert_eq!(strip_non_esp_marker(&[0, 0, 0, 0], 4), Some(&[][..]));
+        // NAT-keepalive
+        assert_eq!(strip_non_esp_marker(&[0xff], 4), None);
+        // ESP with a non-zero SPI
+        assert_eq!(strip_non_esp_marker(&[0, 0, 0x10, 0, 1, 2], 4), None);
+        // no marker on port 500
+        assert_eq!(strip_non_esp_marker(&[1, 2], 0), Some(&[1, 2][..]));
     }
 }

@@ -1,8 +1,8 @@
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{
     ikev1::{
@@ -56,6 +56,12 @@ impl IsakmpMessageCodec<Ikev1Message> for Ikev1Codec {
     }
 
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<Ikev1Message>> {
+        // checked before the duplicate filter so that garbage is not recorded as a received message
+        if let Err(e) = Ikev1Message::validate(data) {
+            debug!("Discarding invalid IKEv1 message: {}", e);
+            return Ok(None);
+        }
+
         if !self.session.validate_message(data)? {
             trace!("Discarding duplicate message");
             return Ok(None);
@@ -71,10 +77,10 @@ impl IsakmpMessageCodec<Ikev1Message> for Ikev1Codec {
         let exchange_type: ExchangeType = reader.read_u8()?.into();
         let flags: IsakmpFlags = IsakmpFlags::from_bits_retain(reader.read_u8()?);
         let message_id = reader.read_u32::<BigEndian>()?;
-        let length = reader.read_u32::<BigEndian>()?;
+        // the length field was checked against the slice size by validate()
+        reader.read_u32::<BigEndian>()?;
 
-        let mut data = vec![0u8; length as usize - ISAKMP_HEADER_LEN];
-        reader.read_exact(&mut data)?;
+        let mut data = data[ISAKMP_HEADER_LEN..].to_vec();
 
         if flags.contains(IsakmpFlags::ENCRYPTION) {
             data = self.session.decrypt_and_set_iv(&data, message_id)?.to_vec();
@@ -93,5 +99,32 @@ impl IsakmpMessageCodec<Ikev1Message> for Ikev1Codec {
             message_id,
             payloads,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{model::Identity, session::SessionType};
+
+    const MM: &[u8] = include_bytes!("../../tests/mm.bin");
+
+    fn codec() -> Ikev1Codec {
+        Ikev1Codec::new(Ikev1Session::new(Identity::None, SessionType::Initiator).unwrap())
+    }
+
+    #[test]
+    fn test_decode_discards_invalid_data() {
+        let mut codec = codec();
+        let mut truncated = MM[..100].to_vec();
+        truncated[24..28].copy_from_slice(&264u32.to_be_bytes());
+
+        for data in [&[][..], &[0xff], &[0; 27], &MM[..100], &truncated, &[0x5a; 300]] {
+            assert!(codec.decode(data).unwrap().is_none());
+        }
+
+        // garbage must not be recorded by the duplicate filter
+        assert!(codec.decode(MM).unwrap().is_some());
+        assert!(codec.decode(MM).unwrap().is_none());
     }
 }

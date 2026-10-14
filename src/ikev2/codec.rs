@@ -5,7 +5,7 @@ use std::{io::Cursor, sync::Arc};
 use anyhow::Context;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, Bytes, BytesMut};
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{
     crypto::Crypto,
@@ -312,8 +312,9 @@ impl IsakmpMessageCodec<Ikev2Message> for Ikev2Codec {
     }
 
     fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<Ikev2Message>> {
-        if data.len() < ISAKMP_HEADER_LEN {
-            anyhow::bail!("IKEv2 message shorter than its header");
+        if let Err(e) = Ikev2Message::validate(data) {
+            debug!("Discarding invalid IKEv2 message: {}", e);
+            return Ok(None);
         }
 
         let mut reader = Cursor::new(data);
@@ -325,45 +326,26 @@ impl IsakmpMessageCodec<Ikev2Message> for Ikev2Codec {
         let exchange_type: ExchangeType = reader.read_u8()?.into();
         let flags = Flags::from_bits_retain(reader.read_u8()?);
         let message_id = reader.read_u32::<BigEndian>()?;
+        // validate() checked the version, and the length field against the slice size
         let length = reader.read_u32::<BigEndian>()? as usize;
-
-        if version >> 4 != IKEV2_VERSION >> 4 {
-            anyhow::bail!("Not an IKEv2 message: version {:#04x}", version);
-        }
-        if length > data.len() {
-            anyhow::bail!("IKEv2 message claims {} bytes, got {}", length, data.len());
-        }
 
         trace!(
             "Decoding IKEv2 message: exchange={:?}, flags={:?}, id={}, len={}",
             exchange_type, flags, message_id, length
         );
 
-        let data = &data[..length];
-
         let payloads = if next_payload == PayloadType::Encrypted {
             // the SK payload is the only one at the top level, so its generic
-            // header sits immediately after the message header
-            let mut sk_header = Cursor::new(&data[ISAKMP_HEADER_LEN..]);
-            let first_payload: PayloadType = sk_header.read_u8()?.into();
-            sk_header.read_u8()?;
-            let sk_len = sk_header.read_u16::<BigEndian>()? as usize;
-
-            let sk_end = ISAKMP_HEADER_LEN
-                .checked_add(sk_len)
-                .filter(|end| *end <= data.len() && sk_len >= 4)
-                .context("SK payload length outside the message")?;
-
-            if sk_end != data.len() {
-                anyhow::bail!("The SK payload must be the last payload in the message");
-            }
+            // header sits immediately after the message header, and validate()
+            // checked that it ends with the message
+            let first_payload: PayloadType = data[ISAKMP_HEADER_LEN].into();
 
             let crypt = self
                 .source
                 .crypt()
                 .context("Received an SK payload before the SA is keyed")?;
 
-            Self::decode_encrypted(&crypt, data, ISAKMP_HEADER_LEN, sk_end, first_payload)?
+            Self::decode_encrypted(&crypt, data, ISAKMP_HEADER_LEN, data.len(), first_payload)?
         } else {
             let mut cursor = Cursor::new(&data[ISAKMP_HEADER_LEN..]);
             Payload::parse_all(next_payload, &mut cursor)?
@@ -675,25 +657,42 @@ mod tests {
     }
 
     #[test]
-    fn test_non_ikev2_version_is_rejected() {
+    fn test_non_ikev2_version_is_discarded() {
         let mut codec = Ikev2Codec::new();
         let mut encoded = codec.encode(&sa_init(sa_init_payloads())).unwrap().to_vec();
         encoded[17] = 0x10; // IKEv1
 
-        let err = codec.decode(&encoded).unwrap_err();
-        assert!(err.to_string().contains("Not an IKEv2 message"), "{err}");
+        assert!(codec.decode(&encoded).unwrap().is_none());
     }
 
     #[test]
-    fn test_truncated_and_overlong_messages_are_rejected() {
+    fn test_truncated_and_overlong_messages_are_discarded() {
         let mut codec = Ikev2Codec::new();
         let encoded = codec.encode(&sa_init(sa_init_payloads())).unwrap();
 
-        assert!(codec.decode(&encoded[..20]).is_err());
+        assert!(codec.decode(&encoded[..20]).unwrap().is_none());
 
         let mut overlong = encoded.to_vec();
         overlong[27] = overlong[27].wrapping_add(16);
-        assert!(codec.decode(&overlong).is_err());
+        assert!(codec.decode(&overlong).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_invalid_data_is_discarded() {
+        let mut codec = Ikev2Codec::new();
+        let encoded = codec.encode(&sa_init(sa_init_payloads())).unwrap();
+
+        // a length field below the header size used to panic on slicing
+        let mut short_length = encoded.to_vec();
+        short_length[24..28].copy_from_slice(&20u32.to_be_bytes());
+
+        let mut trailing = encoded.to_vec();
+        trailing.push(0);
+
+        for data in [&[][..], &[0xff], &[0; 27], &short_length, &trailing, &[0x5a; 300]] {
+            assert!(codec.decode(data).unwrap().is_none());
+        }
+        assert!(codec.decode(&encoded).unwrap().is_some());
     }
 
     /// An AEAD cipher may not be paired with an integrity transform, and a
