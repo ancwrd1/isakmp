@@ -525,6 +525,7 @@ dependencies = [
  "rmp-serde",
  "secrecy",
  "serde",
+ "socket2",
  "tokio",
  "tokio-util",
  "tracing",

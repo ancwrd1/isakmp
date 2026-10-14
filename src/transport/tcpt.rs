@@ -1,9 +1,10 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{StreamExt, sink::SinkExt};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncRead, AsyncWrite, Interest},
     net::TcpStream,
@@ -19,6 +20,10 @@ use crate::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+const TCP_KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
+    .with_time(Duration::from_secs(120))
+    .with_interval(Duration::from_secs(10));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TcptDataType {
@@ -173,6 +178,11 @@ impl<M> TcptTransport<M> {
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await??;
                 stream.set_nodelay(true)?;
 
+                let sock_ref = SockRef::from(&stream);
+                if let Err(e) = sock_ref.set_tcp_keepalive(&TCP_KEEPALIVE) {
+                    warn!("Cannot set TCP keepalive timeout: {e}");
+                }
+
                 debug!("Connected, starting TCPT handshake");
                 stream.handshake(self.data_type).await?;
 
@@ -194,9 +204,26 @@ async fn do_receive(data_type: TcptDataType, stream: &mut TcpStream, timeout: Du
     let mut framed = TcptTransportCodec::new(data_type).framed(stream);
     let data = tokio::time::timeout(timeout, framed.next())
         .await?
-        .context("No data")??;
+        .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))??;
 
     Ok(data)
+}
+
+/// Errors after which the TCP connection is unusable and a fresh one may succeed, e.g. when an idle
+/// connection was dropped by a NAT on the path (issue #2): the first write after that goes into the
+/// socket buffer, the reset surfaces on the following read, and later writes fail with EPIPE.
+fn is_connection_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<io::Error>().is_some_and(|e| {
+        matches!(
+            e.kind(),
+            io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::NotConnected
+                | io::ErrorKind::TimedOut
+                | io::ErrorKind::UnexpectedEof
+        )
+    })
 }
 
 #[async_trait]
@@ -207,24 +234,33 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
         trace!("Sending ISAKMP message: {:#?}", message);
 
         let data_type = self.data_type;
-        let stream = self.get_stream().await?;
 
-        match do_send(data_type, stream, &data).await {
+        match do_send(data_type, self.get_stream().await?, &data).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 warn!("{}", e);
                 self.disconnect();
-                Err(e)
+                if is_connection_error(&e) && self.address.is_some() {
+                    debug!("Reconnecting and retrying send");
+                    do_send(data_type, self.get_stream().await?, &data).await
+                } else {
+                    Err(e)
+                }
             }
         }
     }
 
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<M> {
-        let stream = self.stream.as_mut().context("No stream")?;
         loop {
+            let stream = self.stream.as_mut().context("No stream")?;
             let data = match do_receive(self.data_type, stream, timeout).await {
                 Ok(data) => data,
                 Err(e) => {
+                    // A timeout is expected while polling for gateway requests and leaves the connection
+                    // intact; anything else (reset, EOF, framing error) means it cannot be reused.
+                    if !e.is::<tokio::time::error::Elapsed>() {
+                        self.disconnect();
+                    }
                     return Err(e);
                 }
             };
@@ -235,6 +271,23 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
                 trace!("Received ISAKMP message: {:#?}", received_message);
                 return Ok(received_message);
             }
+        }
+    }
+
+    async fn send_receive(&mut self, message: &M, timeout: Duration) -> anyhow::Result<M>
+    where
+        M: Sync,
+    {
+        self.send(message).await?;
+        match self.receive(timeout).await {
+            Err(e) if is_connection_error(&e) && self.address.is_some() => {
+                // The send into a stale connection succeeds and the reset only shows up here, so the whole
+                // round trip is repeated on a new connection; the gateway treats it as a retransmission.
+                warn!("{}, reconnecting and retrying request", e);
+                self.send(message).await?;
+                self.receive(timeout).await
+            }
+            result => result,
         }
     }
 
