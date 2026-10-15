@@ -26,12 +26,12 @@ pnet_macros = "0.35"
 pnet_macros_support = "0.35"
 ipnet = "2"
 secrecy = "0.10"
-socket2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
+socket2 = "0.6"
 opener = "0.9"
 secrecy = "0.10"
 regex = "1"

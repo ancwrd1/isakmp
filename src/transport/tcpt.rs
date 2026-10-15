@@ -1,15 +1,20 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{StreamExt, sink::SinkExt};
-use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncRead, AsyncWrite, Interest},
-    net::TcpStream,
+    net::{
+        TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
+    sync::Mutex,
+    task::JoinHandle,
+    time::MissedTickBehavior,
 };
-use tokio_util::codec::{Decoder, Encoder, Framed};
+use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -21,9 +26,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
-const TCP_KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
-    .with_time(Duration::from_secs(120))
-    .with_interval(Duration::from_secs(10));
+/// Interval of the NAT-keepalive on an IKE channel, the 20 seconds suggested by RFC 3948 §4. An idle
+/// connection is otherwise dropped by a NAT or firewall on the path (issue #2); TCP keepalive probes
+/// did not prevent that.
+const NATT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
+
+/// The one-octet NAT-keepalive packet (RFC 3948 §2.3) that would go to UDP port 4500, carried in a
+/// TCPT frame. The gateway discards it, and one echoed back fails IKE message validation.
+const NATT_KEEPALIVE: &[u8] = &[0xff];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TcptDataType {
@@ -133,15 +143,65 @@ where
     }
 }
 
+type FramedWriter = Arc<Mutex<FramedWrite<OwnedWriteHalf, TcptTransportCodec>>>;
+
 /// The connection is kept framed for its whole lifetime: one read may return more than one frame, and
-/// the read buffer must outlive a single `receive` call or the frames after the first are lost.
-type FramedStream = Framed<TcpStream, TcptTransportCodec>;
+/// the read buffer must outlive a single `receive` call or the frames after the first are lost. The
+/// write half is shared with the keepalive task, which is stopped when the connection is dropped.
+struct Connection {
+    reader: FramedRead<OwnedReadHalf, TcptTransportCodec>,
+    writer: FramedWriter,
+    keepalive: Option<JoinHandle<()>>,
+}
+
+impl Connection {
+    fn new(data_type: TcptDataType, stream: TcpStream, keepalive_interval: Option<Duration>) -> Self {
+        let (reader, writer) = stream.into_split();
+        let writer = Arc::new(Mutex::new(FramedWrite::new(writer, TcptTransportCodec::new(data_type))));
+        let keepalive = keepalive_interval.map(|interval| tokio::spawn(run_keepalive(writer.clone(), interval)));
+
+        Self {
+            reader: FramedRead::new(reader, TcptTransportCodec::new(data_type)),
+            writer,
+            keepalive,
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(keepalive) = self.keepalive.take() {
+            keepalive.abort();
+        }
+    }
+}
+
+async fn run_keepalive(writer: FramedWriter, period: Duration) {
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        interval.tick().await;
+        trace!("Sending NAT-T keepalive");
+        let mut writer = writer.lock().await;
+        if let Err(e) = do_send(&mut writer, &Bytes::from_static(NATT_KEEPALIVE)).await {
+            // the next request finds the connection broken and reconnects
+            warn!("NAT-T keepalive failed: {}", e);
+            break;
+        }
+    }
+}
+
+fn keepalive_interval(data_type: TcptDataType) -> Option<Duration> {
+    (data_type == TcptDataType::Ike).then_some(NATT_KEEPALIVE_INTERVAL)
+}
 
 pub struct TcptTransport<M> {
     address: Option<SocketAddr>,
     codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
-    stream: Option<FramedStream>,
+    stream: Option<Connection>,
     data_type: TcptDataType,
+    keepalive_interval: Option<Duration>,
 }
 
 impl<M> TcptTransport<M> {
@@ -155,6 +215,7 @@ impl<M> TcptTransport<M> {
             codec,
             stream: None,
             data_type,
+            keepalive_interval: keepalive_interval(data_type),
         }
     }
 
@@ -163,53 +224,58 @@ impl<M> TcptTransport<M> {
         stream: TcpStream,
         codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     ) -> Self {
+        let keepalive_interval = keepalive_interval(data_type);
         Self {
             address: None,
             codec,
-            stream: Some(TcptTransportCodec::new(data_type).framed(stream)),
+            stream: Some(Connection::new(data_type, stream, keepalive_interval)),
             data_type,
+            keepalive_interval,
         }
     }
 
-    async fn get_stream(&mut self) -> anyhow::Result<&mut FramedStream> {
+    async fn get_stream(&mut self) -> anyhow::Result<&FramedWriter> {
         match (self.stream.take(), self.address) {
             (Some(stream), _)
                 if stream
+                    .reader
                     .get_ref()
                     .ready(Interest::READABLE | Interest::WRITABLE)
                     .await
                     .is_ok() =>
             {
                 self.stream = Some(stream);
-                Ok(self.stream.as_mut().unwrap())
+                Ok(&self.stream.as_ref().unwrap().writer)
             }
             (None, Some(address)) => {
                 debug!("Connecting to {}", address);
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await??;
                 stream.set_nodelay(true)?;
 
-                let sock_ref = SockRef::from(&stream);
-                if let Err(e) = sock_ref.set_tcp_keepalive(&TCP_KEEPALIVE) {
-                    warn!("Cannot set TCP keepalive timeout: {e}");
-                }
-
                 debug!("Connected, starting TCPT handshake");
                 stream.handshake(self.data_type).await?;
 
-                self.stream = Some(TcptTransportCodec::new(self.data_type).framed(stream));
-                Ok(self.stream.as_mut().unwrap())
+                self.stream = Some(Connection::new(self.data_type, stream, self.keepalive_interval));
+                Ok(&self.stream.as_ref().unwrap().writer)
             }
             _ => anyhow::bail!("Transport disconnected"),
         }
     }
 }
 
-async fn do_send(stream: &mut FramedStream, data: &Bytes) -> anyhow::Result<()> {
-    tokio::time::timeout(SEND_TIMEOUT, stream.send(data.clone())).await??;
+async fn do_send(writer: &mut FramedWrite<OwnedWriteHalf, TcptTransportCodec>, data: &Bytes) -> anyhow::Result<()> {
+    tokio::time::timeout(SEND_TIMEOUT, writer.send(data.clone())).await??;
     Ok(())
 }
 
-async fn do_receive(stream: &mut FramedStream, timeout: Duration) -> anyhow::Result<Bytes> {
+async fn send_locked(writer: &FramedWriter, data: &Bytes) -> anyhow::Result<()> {
+    do_send(&mut *writer.lock().await, data).await
+}
+
+async fn do_receive(
+    stream: &mut FramedRead<OwnedReadHalf, TcptTransportCodec>,
+    timeout: Duration,
+) -> anyhow::Result<Bytes> {
     let data = tokio::time::timeout(timeout, stream.next())
         .await?
         .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))??;
@@ -241,14 +307,14 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
 
         trace!("Sending ISAKMP message: {:#?}", message);
 
-        match do_send(self.get_stream().await?, &data).await {
+        match send_locked(self.get_stream().await?, &data).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 warn!("{}", e);
                 self.disconnect();
                 if is_connection_error(&e) && self.address.is_some() {
                     debug!("Reconnecting and retrying send");
-                    do_send(self.get_stream().await?, &data).await
+                    send_locked(self.get_stream().await?, &data).await
                 } else {
                     Err(e)
                 }
@@ -259,7 +325,7 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
     async fn receive(&mut self, timeout: Duration) -> anyhow::Result<M> {
         loop {
             let stream = self.stream.as_mut().context("No stream")?;
-            let data = match do_receive(stream, timeout).await {
+            let data = match do_receive(&mut stream.reader, timeout).await {
                 Ok(data) => data,
                 Err(e) => {
                     // A timeout is expected while polling for gateway requests and leaves the connection
@@ -304,6 +370,7 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
 
 #[cfg(test)]
 mod tests {
+    use socket2::SockRef;
     use tokio::{net::TcpListener, sync::oneshot};
     use tokio_util::codec::Framed;
 
@@ -652,6 +719,36 @@ mod tests {
         transport.send(&TestMessage::new(b"request2")).await.unwrap();
 
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_natt_keepalive() {
+        let (listener, address) = listen().await;
+        let server = tokio::spawn(async move {
+            let mut conn = accept(&listener).await;
+            assert_eq!(recv(&mut conn).await, "request");
+            for _ in 0..2 {
+                assert_eq!(recv(&mut conn).await, NATT_KEEPALIVE);
+            }
+            reply(&mut conn, b"response").await;
+            // The keepalive task holds the write half and must not keep the connection open.
+            assert!(conn.next().await.is_none());
+        });
+
+        let mut transport = transport(address);
+        transport.keepalive_interval = Some(Duration::from_millis(20));
+        let response = transport.send_receive(&TestMessage::new(b"request"), TIMEOUT).await;
+        assert_eq!(response.unwrap(), TestMessage::new(b"response"));
+        transport.disconnect();
+
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn test_keepalive_only_for_ike() {
+        assert_eq!(keepalive_interval(TcptDataType::Ike), Some(NATT_KEEPALIVE_INTERVAL));
+        assert_eq!(keepalive_interval(TcptDataType::Esp), None);
+        assert_eq!(keepalive_interval(TcptDataType::Cmd), None);
     }
 
     #[tokio::test]
