@@ -940,6 +940,7 @@ impl Ikev1Service {
         };
 
         self.transport.send(&hash_msg).await?;
+        self.transport.disconnect();
 
         let proposal = EspProposal {
             spi_i,
@@ -978,6 +979,7 @@ impl Ikev1Service {
         let request = self.build_delete_sa()?;
 
         self.transport.send(&request).await?;
+        self.transport.disconnect();
 
         Ok(())
     }
