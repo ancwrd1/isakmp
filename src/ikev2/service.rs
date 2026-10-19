@@ -818,6 +818,8 @@ impl Ikev2Service {
 
         debug!("End IKE_AUTH, address: {}", result.office_mode.ip_address);
 
+        self.transport.enable_keepalive();
+
         Ok(result)
     }
 
@@ -971,6 +973,8 @@ impl Ikev2Service {
         self.message_id = self.session.message_id();
 
         debug!("Restored IKE session, next message id {}", self.message_id);
+
+        self.transport.enable_keepalive();
 
         Ok(office_mode)
     }

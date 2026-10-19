@@ -34,5 +34,9 @@ pub trait IsakmpTransport<M> {
         self.receive(timeout).await
     }
 
+    /// Keeps an idle IKE channel open from now on. Off until the IKE SA is established: a gateway may drop
+    /// a negotiation that receives a NAT-keepalive while it waits for the user to log in (snx-rs#279).
+    fn enable_keepalive(&mut self) {}
+
     fn disconnect(&mut self);
 }

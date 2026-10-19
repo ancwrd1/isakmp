@@ -1,4 +1,9 @@
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -12,7 +17,7 @@ use tokio::{
     },
     sync::Mutex,
     task::JoinHandle,
-    time::MissedTickBehavior,
+    time::Instant,
 };
 use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
 use tracing::{debug, trace, warn};
@@ -145,12 +150,16 @@ where
 
 type FramedWriter = Arc<Mutex<FramedWrite<OwnedWriteHalf, TcptTransportCodec>>>;
 
+/// When a frame last went either way on the connection.
+type LastActivity = Arc<StdMutex<Instant>>;
+
 /// The connection is kept framed for its whole lifetime: one read may return more than one frame, and
 /// the read buffer must outlive a single `receive` call or the frames after the first are lost. The
 /// write half is shared with the keepalive task, which is stopped when the connection is dropped.
 struct Connection {
     reader: FramedRead<OwnedReadHalf, TcptTransportCodec>,
     writer: FramedWriter,
+    last_activity: LastActivity,
     keepalive: Option<JoinHandle<()>>,
 }
 
@@ -158,14 +167,38 @@ impl Connection {
     fn new(data_type: TcptDataType, stream: TcpStream, keepalive_interval: Option<Duration>) -> Self {
         let (reader, writer) = stream.into_split();
         let writer = Arc::new(Mutex::new(FramedWrite::new(writer, TcptTransportCodec::new(data_type))));
-        let keepalive = keepalive_interval.map(|interval| tokio::spawn(run_keepalive(writer.clone(), interval)));
-
-        Self {
+        let mut connection = Self {
             reader: FramedRead::new(reader, TcptTransportCodec::new(data_type)),
             writer,
-            keepalive,
+            last_activity: Arc::new(StdMutex::new(Instant::now())),
+            keepalive: None,
+        };
+        if let Some(interval) = keepalive_interval {
+            connection.start_keepalive(interval);
+        }
+        connection
+    }
+
+    fn start_keepalive(&mut self, interval: Duration) {
+        if self.keepalive.is_none() {
+            self.keepalive = Some(tokio::spawn(run_keepalive(
+                self.writer.clone(),
+                self.last_activity.clone(),
+                interval,
+            )));
         }
     }
+
+    async fn send(&self, data: &Bytes) -> anyhow::Result<()> {
+        // marked under the lock, so a keepalive waiting for it sees this send
+        let mut writer = self.writer.lock().await;
+        touch(&self.last_activity);
+        do_send(&mut writer, data).await
+    }
+}
+
+fn touch(last_activity: &LastActivity) {
+    *last_activity.lock().unwrap() = Instant::now();
 }
 
 impl Drop for Connection {
@@ -176,19 +209,25 @@ impl Drop for Connection {
     }
 }
 
-async fn run_keepalive(writer: FramedWriter, period: Duration) {
-    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
+/// Sends a keepalive only after `period` without a frame in either direction. An exchange times out well
+/// within the period, so a keepalive never lands between a request and its response.
+async fn run_keepalive(writer: FramedWriter, last_activity: LastActivity, period: Duration) {
     loop {
-        interval.tick().await;
-        trace!("Sending NAT-T keepalive");
+        let due = *last_activity.lock().unwrap() + period;
+        tokio::time::sleep_until(due).await;
+
         let mut writer = writer.lock().await;
+        if *last_activity.lock().unwrap() + period > Instant::now() {
+            continue;
+        }
+
+        trace!("Sending NAT-T keepalive");
         if let Err(e) = do_send(&mut writer, &Bytes::from_static(NATT_KEEPALIVE)).await {
             // the next request finds the connection broken and reconnects
             warn!("NAT-T keepalive failed: {}", e);
             break;
         }
+        touch(&last_activity);
     }
 }
 
@@ -215,7 +254,7 @@ impl<M> TcptTransport<M> {
             codec,
             stream: None,
             data_type,
-            keepalive_interval: keepalive_interval(data_type),
+            keepalive_interval: None,
         }
     }
 
@@ -224,17 +263,16 @@ impl<M> TcptTransport<M> {
         stream: TcpStream,
         codec: Box<dyn IsakmpMessageCodec<M> + Send + Sync>,
     ) -> Self {
-        let keepalive_interval = keepalive_interval(data_type);
         Self {
             address: None,
             codec,
-            stream: Some(Connection::new(data_type, stream, keepalive_interval)),
+            stream: Some(Connection::new(data_type, stream, None)),
             data_type,
-            keepalive_interval,
+            keepalive_interval: None,
         }
     }
 
-    async fn get_stream(&mut self) -> anyhow::Result<&FramedWriter> {
+    async fn get_stream(&mut self) -> anyhow::Result<&Connection> {
         match (self.stream.take(), self.address) {
             (Some(stream), _)
                 if stream
@@ -245,7 +283,7 @@ impl<M> TcptTransport<M> {
                     .is_ok() =>
             {
                 self.stream = Some(stream);
-                Ok(&self.stream.as_ref().unwrap().writer)
+                Ok(self.stream.as_ref().unwrap())
             }
             (None, Some(address)) => {
                 debug!("Connecting to {}", address);
@@ -256,7 +294,7 @@ impl<M> TcptTransport<M> {
                 stream.handshake(self.data_type).await?;
 
                 self.stream = Some(Connection::new(self.data_type, stream, self.keepalive_interval));
-                Ok(&self.stream.as_ref().unwrap().writer)
+                Ok(self.stream.as_ref().unwrap())
             }
             _ => anyhow::bail!("Transport disconnected"),
         }
@@ -266,10 +304,6 @@ impl<M> TcptTransport<M> {
 async fn do_send(writer: &mut FramedWrite<OwnedWriteHalf, TcptTransportCodec>, data: &Bytes) -> anyhow::Result<()> {
     tokio::time::timeout(SEND_TIMEOUT, writer.send(data.clone())).await??;
     Ok(())
-}
-
-async fn send_locked(writer: &FramedWriter, data: &Bytes) -> anyhow::Result<()> {
-    do_send(&mut *writer.lock().await, data).await
 }
 
 async fn do_receive(
@@ -307,14 +341,14 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
 
         trace!("Sending ISAKMP message: {:#?}", message);
 
-        match send_locked(self.get_stream().await?, &data).await {
+        match self.get_stream().await?.send(&data).await {
             Ok(()) => Ok(()),
             Err(e) => {
                 warn!("{}", e);
                 self.disconnect();
                 if is_connection_error(&e) && self.address.is_some() {
                     debug!("Reconnecting and retrying send");
-                    send_locked(self.get_stream().await?, &data).await
+                    self.get_stream().await?.send(&data).await
                 } else {
                     Err(e)
                 }
@@ -326,7 +360,10 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
         loop {
             let stream = self.stream.as_mut().context("No stream")?;
             let data = match do_receive(&mut stream.reader, timeout).await {
-                Ok(data) => data,
+                Ok(data) => {
+                    touch(&stream.last_activity);
+                    data
+                }
                 Err(e) => {
                     // A timeout is expected while polling for gateway requests and leaves the connection
                     // intact; anything else (reset, EOF, framing error) means it cannot be reused.
@@ -360,6 +397,13 @@ impl<M: TransportMessage> IsakmpTransport<M> for TcptTransport<M> {
                 self.receive(timeout).await
             }
             result => result,
+        }
+    }
+
+    fn enable_keepalive(&mut self) {
+        self.keepalive_interval = keepalive_interval(self.data_type);
+        if let (Some(interval), Some(stream)) = (self.keepalive_interval, self.stream.as_mut()) {
+            stream.start_keepalive(interval);
         }
     }
 
@@ -739,6 +783,56 @@ mod tests {
         transport.keepalive_interval = Some(Duration::from_millis(20));
         let response = transport.send_receive(&TestMessage::new(b"request"), TIMEOUT).await;
         assert_eq!(response.unwrap(), TestMessage::new(b"response"));
+        transport.disconnect();
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_keepalive_deferred_by_traffic() {
+        let (listener, address) = listen().await;
+        let server = tokio::spawn(async move {
+            let mut conn = accept(&listener).await;
+            for _ in 0..5 {
+                assert_eq!(recv(&mut conn).await, "request");
+            }
+            assert_eq!(recv(&mut conn).await, NATT_KEEPALIVE);
+            assert!(conn.next().await.is_none());
+        });
+
+        let mut transport = transport(address);
+        transport.keepalive_interval = Some(Duration::from_millis(300));
+        for _ in 0..5 {
+            transport.send(&TestMessage::new(b"request")).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        transport.disconnect();
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_keepalive_off_until_enabled() {
+        let (listener, address) = listen().await;
+        let server = tokio::spawn(async move {
+            let mut conn = accept(&listener).await;
+            assert_eq!(recv(&mut conn).await, "request");
+            reply(&mut conn, b"response").await;
+            assert!(conn.next().await.is_none());
+        });
+
+        let mut transport = transport(address);
+        assert_eq!(transport.keepalive_interval, None);
+        transport
+            .send_receive(&TestMessage::new(b"request"), TIMEOUT)
+            .await
+            .unwrap();
+        assert!(transport.stream.as_ref().unwrap().keepalive.is_none());
+
+        transport.enable_keepalive();
+        assert_eq!(transport.keepalive_interval, Some(NATT_KEEPALIVE_INTERVAL));
+        assert!(transport.stream.as_ref().unwrap().keepalive.is_some());
         transport.disconnect();
 
         server.await.unwrap();
