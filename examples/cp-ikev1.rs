@@ -102,7 +102,7 @@ impl TryFrom<IdentityArgs> for Identity {
                 hybrid_auth: false,
             },
             IdentityArgs::Pkcs8 { path } => Identity::Pkcs8 {
-                path,
+                data: std::fs::read(path)?,
                 hybrid_auth: false,
             },
             IdentityArgs::Pkcs11 {

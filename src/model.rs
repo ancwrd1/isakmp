@@ -192,7 +192,7 @@ pub enum Identity {
         hybrid_auth: bool,
     },
     Pkcs8 {
-        path: PathBuf,
+        data: Vec<u8>,
         hybrid_auth: bool,
     },
     Pkcs11 {

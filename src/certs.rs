@@ -45,7 +45,7 @@ pub fn load_identity(identity: Identity) -> anyhow::Result<(bool, Option<Arc<dyn
                 password.expose_secret(),
             )?)),
         ),
-        Identity::Pkcs8 { path, hybrid_auth } => (hybrid_auth, Some(Arc::new(Pkcs8Certificate::from_pkcs8(&path)?))),
+        Identity::Pkcs8 { data, hybrid_auth } => (hybrid_auth, Some(Arc::new(Pkcs8Certificate::from_pkcs8(&data)?))),
         Identity::Pkcs11 {
             driver_path,
             pin,
@@ -192,10 +192,9 @@ impl Pkcs8Certificate {
         }
     }
 
-    pub fn from_pkcs8(path: &Path) -> anyhow::Result<Self> {
-        let data = std::fs::read(path)?;
-        let pkey = PKey::private_key_from_pem(&data)?;
-        let stack = X509::stack_from_pem(&data)?;
+    pub fn from_pkcs8(data: &[u8]) -> anyhow::Result<Self> {
+        let pkey = PKey::private_key_from_pem(data)?;
+        let stack = X509::stack_from_pem(data)?;
 
         Ok(Self {
             pkey,

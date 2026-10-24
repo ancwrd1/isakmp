@@ -90,7 +90,10 @@ fn load_identity(args: Option<IdentityArgs>, cert_type: CertType) -> anyhow::Res
             password: secret(password, "Certificate password: ")?,
             hybrid_auth,
         },
-        Some(IdentityArgs::Pkcs8 { path }) => Identity::Pkcs8 { path, hybrid_auth },
+        Some(IdentityArgs::Pkcs8 { path }) => Identity::Pkcs8 {
+            data: std::fs::read(path)?,
+            hybrid_auth,
+        },
         Some(IdentityArgs::Pkcs11 {
             driver_path,
             pin,
