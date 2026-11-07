@@ -137,6 +137,7 @@ registry! {
     /// [`EspAuthentication`] rather than passing raw values around.
     #[derive(Default)]
     EspAuthAlgorithm: u16 {
+        HmacMd5 = 1,
         HmacSha96 = 2,
         HmacSha160 = 7,
         #[default]
@@ -150,6 +151,7 @@ impl EspAuthAlgorithm {
     /// [`crate::model::EspCryptMaterial`].
     pub fn to_authentication(&self) -> anyhow::Result<EspAuthentication> {
         let digest = match self {
+            EspAuthAlgorithm::HmacMd5 => DigestType::Md5,
             EspAuthAlgorithm::HmacSha96 | EspAuthAlgorithm::HmacSha160 => DigestType::Sha1,
             EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => DigestType::Sha256,
             EspAuthAlgorithm::Other(other) => {
@@ -165,15 +167,18 @@ impl EspAuthAlgorithm {
 
     pub fn key_len(&self) -> usize {
         match self {
+            EspAuthAlgorithm::HmacMd5 => 16,
             EspAuthAlgorithm::HmacSha96 | EspAuthAlgorithm::HmacSha160 => 20,
             EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 32,
             EspAuthAlgorithm::Other(_) => 0,
         }
     }
 
+    /// Truncated ICV length: HMAC-MD5-96 (RFC 2403) and HMAC-SHA1-96
+    /// (RFC 2404) both keep 12 octets.
     pub fn hash_len(&self) -> usize {
         match self {
-            EspAuthAlgorithm::HmacSha96 => 12,
+            EspAuthAlgorithm::HmacMd5 | EspAuthAlgorithm::HmacSha96 => 12,
             EspAuthAlgorithm::HmacSha160 => 20,
             EspAuthAlgorithm::HmacSha256 | EspAuthAlgorithm::HmacSha256v2 => 16,
             EspAuthAlgorithm::Other(_) => 0,

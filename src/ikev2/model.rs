@@ -590,6 +590,20 @@ mod tests {
             IntegrityAlgorithm::from(2u16).to_authentication().unwrap().unwrap()
         );
 
+        // and so is transform 1, HMAC-MD5-96 (RFC 2403)
+        assert_eq!(
+            EspAuthAlgorithm::from(1u16).to_authentication().unwrap(),
+            IntegrityAlgorithm::from(1u16).to_authentication().unwrap().unwrap()
+        );
+        assert_eq!(
+            EspAuthAlgorithm::HmacMd5.to_authentication().unwrap(),
+            EspAuthentication {
+                digest: DigestType::Md5,
+                icv_len: 12
+            }
+        );
+        assert_eq!(EspAuthAlgorithm::HmacMd5.key_len(), 16);
+
         assert_eq!(
             IntegrityAlgorithm::HmacSha256_128.to_authentication().unwrap(),
             Some(EspAuthentication {

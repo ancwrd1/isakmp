@@ -49,6 +49,7 @@ fn known_values() {
     assert_eq!(u16::from(IkeHashAlgorithm::Sha512), 6);
     assert_eq!(u16::from(IkeAuthMethod::HybridInitRsa), 64221);
     assert_eq!(u16::from(EspAuthAlgorithm::HmacSha160), 7);
+    assert_eq!(u16::from(EspAuthAlgorithm::HmacMd5), 1);
     assert_eq!(u16::from(EspEncapMode::CheckpointEspInUdp), 0xf003);
     assert_eq!(u8::from(IdentityType::Ipv4Subnet), 4);
     assert_eq!(u8::from(PayloadType::MachineSignature), 0xf9);

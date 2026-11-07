@@ -503,10 +503,17 @@ mod tests {
             CipherType::Aes256Cbc,
         ];
 
-        // HMAC-SHA1-96, HMAC-SHA1-160 and HMAC-SHA2-256-128: the same digest
-        // can carry different truncations, which is why the ICV length is
-        // stored rather than derived
+        // HMAC-MD5-96, HMAC-SHA1-96, HMAC-SHA1-160 and HMAC-SHA2-256-128: the
+        // same digest can carry different truncations, which is why the ICV
+        // length is stored rather than derived
         let auths = [
+            (
+                EspAuthentication {
+                    digest: DigestType::Md5,
+                    icv_len: 12,
+                },
+                16,
+            ),
             (
                 EspAuthentication {
                     digest: DigestType::Sha1,

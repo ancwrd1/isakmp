@@ -164,6 +164,7 @@ impl Ikev1Service {
                     EspAuthAlgorithm::HmacSha256,
                     EspAuthAlgorithm::HmacSha160,
                     EspAuthAlgorithm::HmacSha96,
+                    EspAuthAlgorithm::HmacMd5,
                 ],
                 [EspEncapMode::UdpTunnel, EspEncapMode::CheckpointEspInUdp],
                 key_lengths,

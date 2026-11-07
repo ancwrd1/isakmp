@@ -1229,6 +1229,7 @@ impl Ikev2Service {
                 Transform::integrity(IntegrityAlgorithm::HmacSha384_192),
                 Transform::integrity(IntegrityAlgorithm::HmacSha256_128),
                 Transform::integrity(IntegrityAlgorithm::HmacSha1_96),
+                Transform::integrity(IntegrityAlgorithm::HmacMd5_96),
                 Transform::esn(ExtendedSequenceNumbers::None),
             ],
         };
