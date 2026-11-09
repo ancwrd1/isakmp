@@ -201,7 +201,7 @@ pub enum Identity {
         key_id: Option<Bytes>,
         hybrid_auth: bool,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     System {
         common_name: String,
     },

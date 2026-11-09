@@ -57,6 +57,8 @@ pub fn load_identity(identity: Identity) -> anyhow::Result<(bool, Option<Arc<dyn
         ),
         #[cfg(windows)]
         Identity::System { common_name } => (true, Some(Arc::new(windows::SystemCertificate::new(&common_name)?))),
+        #[cfg(target_os = "macos")]
+        Identity::System { common_name } => (true, Some(Arc::new(macos::SystemCertificate::new(&common_name)?))),
         Identity::None => (false, None),
     })
 }
@@ -640,6 +642,174 @@ pub mod windows {
             let utf16 = slice::from_raw_parts(buf.as_ptr() as *const u16, buf.len() / 2);
             let len = utf16.iter().position(|&c| c == 0).unwrap_or(utf16.len());
             Ok(String::from_utf16_lossy(&utf16[..len]))
+        }
+    }
+}
+
+/// Client certificate whose private key stays in the macOS keychain.
+///
+/// The counterpart of the Windows `SystemCertificate`: the identity is looked
+/// up by a substring of its subject, first in the caller's default keychain
+/// search list (which also covers CryptoTokenKit smart cards), then in the
+/// System keychain, where a root daemon's machine certificate normally lives.
+#[cfg(target_os = "macos")]
+pub mod macos {
+    use anyhow::{Context, anyhow};
+    use bytes::Bytes;
+    use openssl::{pkey::Id, x509::X509};
+    use security_framework::{
+        identity::SecIdentity,
+        item::{ItemClass, ItemSearchOptions, Limit, Reference, SearchResult},
+        key::{Algorithm, SecKey},
+        os::macos::keychain::SecKeychain,
+        policy::SecPolicy,
+        trust::SecTrust,
+    };
+    use tracing::debug;
+
+    use super::{CertList, ClientCertificate};
+
+    const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
+
+    pub struct SystemCertificate {
+        key: SecKey,
+        certs: CertList,
+    }
+
+    impl SystemCertificate {
+        pub fn new(common_name: &str) -> anyhow::Result<Self> {
+            debug!(
+                "Searching keychain for identity with subject containing '{}'",
+                common_name
+            );
+
+            let (identity, cert) = match Self::find_identity(None, common_name)? {
+                Some(found) => found,
+                None => {
+                    debug!("Not found in default keychains, trying {}", SYSTEM_KEYCHAIN);
+                    let system = SecKeychain::open(SYSTEM_KEYCHAIN).context("Cannot open System keychain")?;
+                    Self::find_identity(Some(system), common_name)?
+                        .ok_or_else(|| anyhow!("No identity matching '{}' in the keychain", common_name))?
+                }
+            };
+
+            let certs = CertList(Self::build_chain(&identity, cert)?);
+
+            let entity = certs.0.first().context("Empty certificate chain")?;
+            if entity.public_key()?.id() != Id::RSA {
+                anyhow::bail!("Certificate public key is not RSA");
+            }
+
+            debug!("Acquiring private key reference");
+
+            let key = identity.private_key().context("Cannot get private key for identity")?;
+
+            Ok(Self { key, certs })
+        }
+
+        fn find_identity(
+            keychain: Option<SecKeychain>,
+            common_name: &str,
+        ) -> anyhow::Result<Option<(SecIdentity, X509)>> {
+            let mut options = ItemSearchOptions::new();
+            options.class(ItemClass::identity()).load_refs(true).limit(Limit::All);
+            if let Some(keychain) = keychain {
+                options.keychains(&[keychain]);
+            }
+
+            // errSecItemNotFound surfaces as an error; an empty search is not a failure here.
+            let results = match options.search() {
+                Ok(results) => results,
+                Err(e) if e.code() == -25300 => return Ok(None),
+                Err(e) => return Err(e).context("Keychain identity search failed"),
+            };
+
+            for result in results {
+                let SearchResult::Ref(Reference::Identity(identity)) = result else {
+                    continue;
+                };
+                let Ok(cert) = identity.certificate() else {
+                    continue;
+                };
+                let Ok(x509) = X509::from_der(&cert.to_der()) else {
+                    continue;
+                };
+                // Mirrors CERT_FIND_SUBJECT_STR on Windows: a substring match against any subject RDN value.
+                let matches = x509
+                    .subject_name()
+                    .entries()
+                    .filter_map(|e| e.data().to_string().ok())
+                    .any(|v| v.contains(common_name));
+                if matches {
+                    debug!("Found identity: {}", cert.subject_summary());
+                    return Ok(Some((identity, x509)));
+                }
+            }
+
+            Ok(None)
+        }
+
+        /// Builds the chain from the keychain's trust store, leaving out the
+        /// self-signed root as the Windows implementation does. Trust
+        /// evaluation failing is not fatal: the gateway does its own
+        /// validation, and a partial chain still carries the entity cert.
+        fn build_chain(identity: &SecIdentity, entity: X509) -> anyhow::Result<Vec<X509>> {
+            let cert = identity.certificate()?;
+            let trust = SecTrust::create_with_certificates(&[cert], &[SecPolicy::create_x509()])?;
+
+            if let Err(e) = trust.evaluate_with_error() {
+                debug!("Certificate trust evaluation failed: {}", e);
+            }
+
+            let mut out = vec![entity];
+
+            for c in trust.chain().iter().skip(1) {
+                let x509 = X509::from_der(&c.to_der())?;
+                let self_signed = x509.subject_name().try_cmp(x509.issuer_name())? == std::cmp::Ordering::Equal;
+                if self_signed {
+                    break;
+                }
+                out.push(x509);
+            }
+
+            Ok(out)
+        }
+    }
+
+    impl ClientCertificate for SystemCertificate {
+        fn issuer(&self) -> Bytes {
+            self.certs.issuer()
+        }
+
+        fn issuer_name(&self) -> String {
+            self.certs.issuer_name()
+        }
+
+        fn subject(&self) -> Bytes {
+            self.certs.subject()
+        }
+
+        fn subject_name(&self) -> String {
+            self.certs.subject_name()
+        }
+
+        fn fingerprint(&self) -> Bytes {
+            self.certs.fingerprint()
+        }
+
+        fn certs(&self) -> Vec<Bytes> {
+            self.certs.certs()
+        }
+
+        /// PKCS#1 v1.5 type-1 padding over the caller's bytes as-is, without
+        /// adding a `DigestInfo`: IKEv1 signs the bare hash and IKEv2 passes
+        /// a prebuilt one (see [`crate::crypto::DigestType::digest_info`]).
+        fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
+            let signature = self
+                .key
+                .create_signature(Algorithm::RSASignatureDigestPKCS1v15Raw, data)
+                .map_err(|e| anyhow!("SecKeyCreateSignature failed: {}", e))?;
+            Ok(signature.into())
         }
     }
 }

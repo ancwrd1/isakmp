@@ -30,6 +30,9 @@ secrecy = "0.10"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3", features = ["macos-12"] }
+
 [dev-dependencies]
 socket2 = "0.6"
 opener = "0.9"
