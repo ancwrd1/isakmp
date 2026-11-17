@@ -537,6 +537,11 @@ impl Ikev2Service {
 
         let response = self.exchange(ExchangeType::IkeAuth, payloads, None).await?;
 
+        // A gateway that refuses the user outright answers with EAP Failure alone, without IDr or AUTH.
+        if Self::is_eap_failure(&response) {
+            return Err(Self::eap_failure(&response));
+        }
+
         let (id_r, certificates) = self.authenticate_responder(&response)?;
 
         self.auth = Some(AuthContext {
@@ -729,7 +734,7 @@ impl Ikev2Service {
         };
 
         match eap.code {
-            EapCode::Failure => anyhow::bail!("EAP authentication failed"),
+            EapCode::Failure => return Err(Self::eap_failure(&response)),
             EapCode::Success => {
                 debug!("EAP succeeded, sending AUTH");
             }
@@ -1235,6 +1240,31 @@ impl Ikev2Service {
         };
 
         vec![aead, cbc]
+    }
+
+    fn is_eap_failure(response: &Ikev2Message) -> bool {
+        response.payloads.iter().any(|p| match p {
+            Payload::Eap(eap) => EapMessage::parse(&eap.data).is_ok_and(|eap| eap.code == EapCode::Failure),
+            _ => false,
+        })
+    }
+
+    // Check Point states the reason in the text part of CP_RA_AUTH_LOG, ahead of its msg_obj.
+    fn eap_failure(response: &Ikev2Message) -> anyhow::Error {
+        let reason = response.payloads.iter().find_map(|p| match p {
+            Payload::Notify(payload) if payload.notify_type == NotifyType::CpRaAuthLog => payload
+                .data
+                .split(|c| *c == 0)
+                .next()
+                .map(|text| String::from_utf8_lossy(text).trim().to_owned())
+                .filter(|text| !text.is_empty()),
+            _ => None,
+        });
+
+        match reason {
+            Some(reason) => anyhow::anyhow!("EAP authentication failed: {reason}"),
+            None => anyhow::anyhow!("EAP authentication failed"),
+        }
     }
 
     fn responder_identity(response: &Ikev2Message) -> anyhow::Result<(IdentificationPayload, Vec<Bytes>)> {
@@ -2396,6 +2426,29 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("EAP authentication failed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_ike_auth_reports_an_outright_eap_failure_with_its_reason() {
+        let (mut service, script) = authenticated_service().await;
+
+        script.push(ike_auth_response(
+            &service,
+            1,
+            vec![
+                eap(EapCode::Failure, None, b""),
+                Payload::Notify(NotifyPayload::new(
+                    NotifyType::CpRaAuthLog,
+                    Bytes::from_static(b"Unable to activate SecurID authentication\n\0(msg_obj)\n\0"),
+                )),
+            ],
+        ));
+
+        let err = service.do_auth(auth_request()).await.unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "EAP authentication failed: Unable to activate SecurID authentication"
+        );
     }
 
     #[tokio::test]
